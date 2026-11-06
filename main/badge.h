@@ -23,6 +23,9 @@ void ui_close(void);
 enum { BTN_PLUS, BTN_MINUS, BTN_A, BTN_B };
 int btn_get(int timeout_ms); // next press, -1 on timeout; timeout -1 waits forever
 void btn_flush(void);
+int btn_held(void); // buttons held right now: bit (1 << BTN_x) set while pressed, updated every 20 ms
+
+int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: fails while Wi-Fi is busy)
 
 // Apps: run() takes over the badge. Returning goes back to the home screen; most apps never return.
 void app_update(void);
