@@ -37,23 +37,22 @@ static bool newer(const char *a, const char *b)
     return false;
 }
 
-static void screen(const char *l1, const char *l2, int p) // p < 0: no progress bar
+// The screen is a log: every message goes on the next empty line. Fast refreshes leave the old picture
+// faintly behind, so text is never written over other text.
+static int y;
+
+static void say(int scale, const char *l)
 {
-    memset(fb, 0, sizeof fb);
-    text(48, 48, 6, "Online update", true);
-    text(48, 200, 4, l1, true);
-    if (l2) text(48, 260, 3, l2, true);
-    if (p >= 0) {
-        outline(96, 340, 768, 96, 6);
-        box(108, 352, 744 * p / 100, 72, true);
-    }
+    text(48, y, scale, l, true);
+    y += 8 * scale + 24;
 }
 
-static void done(const char *l1, const char *l2) // final message, then home on any button
+static void done(const char *l1, const char *l2) // final message, then back on any button
 {
-    screen(l1, l2, -1);
-    text(48, 560, 3, "Any button goes home.", true);
-    ui_frame(3);
+    say(4, l1);
+    if (l2) say(3, l2);
+    text(48, 600, 3, "Any button goes back.", true);
+    ui_frame(1);
     ui_close();
     btn_flush();
     btn_get(-1);
@@ -64,7 +63,12 @@ static void run(void)
     const char *ours = esp_app_get_description()->version;
     char s[64];
     snprintf(s, sizeof s, "This badge: v%s", ours);
-    screen("Checking for updates...", s, -1);
+    ui_wipe(); // we come right after another app's screen
+    memset(fb, 0, sizeof fb);
+    y = 48;
+    say(6, "Online update");
+    say(3, s);
+    say(4, "Checking for updates...");
     ui_frame(3);
 
     if (!wifi_connect(20000)) return done("No Wi-Fi.", "Could not join the badge network.");
@@ -97,15 +101,17 @@ static void run(void)
         return done("Badge is up to date.", s);
     }
 
-    // Download: one frame per 10 %, the download waits during each ~1.07 s pull.
-    char l1[96];
-    snprintf(l1, sizeof l1, "Updating v%s -> v%s", ours, img.version);
+    // Download: the bar grows (only black is added), one frame per 10 %; the download waits during each pull.
+    snprintf(s, sizeof s, "Updating to v%s", img.version);
+    say(4, s);
+    int bar = y;
+    outline(48, bar, 864, 64, 6);
+    y += 64 + 24;
     int size = esp_https_ota_get_image_size(h), shown = -10;
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int p = size > 0 ? (long long)esp_https_ota_get_image_len_read(h) * 100 / size : 0;
         if (p >= shown + 10) {
-            snprintf(s, sizeof s, "%d%%", p);
-            screen(l1, s, p);
+            box(60, bar + 12, 840 * p / 100, 40, true);
             ui_frame(1);
             shown = p;
         }
@@ -120,8 +126,7 @@ static void run(void)
         return done("Update failed.", esp_err_to_name(err));
     }
 
-    snprintf(s, sizeof s, "Installed v%s. Restarting.", img.version);
-    screen("Done.", s, 100);
+    say(4, "Installed. Restarting.");
     ui_frame(1);
     ui_close();
     ms(2000);
