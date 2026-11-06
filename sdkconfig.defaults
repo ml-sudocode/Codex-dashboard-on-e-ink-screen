@@ -10,3 +10,7 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_SERIAL_FLASHER_PORT_USB_CDC_ACM=y
 # a new version must reach the home screen once, or the bootloader goes back to the old one
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# apps run on the home screen task: give them room (TLS in the Online app needs it)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# a crash leaves its backtrace in flash: idf.py coredump-info after the reboot
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
