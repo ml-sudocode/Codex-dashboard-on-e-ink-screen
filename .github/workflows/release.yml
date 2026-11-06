@@ -1,0 +1,30 @@
+# Tag push v* (e.g. v0.2): build with that version and attach the images to the GitHub release.
+# badge_os.bin is what the Online app downloads; badge_os_full.bin (bootloader + table + app) flashes at 0x0 by cable.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version and Wi-Fi from the tag and repo secrets
+        env:
+          WIFI_SSID: ${{ secrets.WIFI_SSID }}
+          WIFI_PASS: ${{ secrets.WIFI_PASS }}
+        run: |
+          echo "${GITHUB_REF_NAME#v}" > version.txt
+          printf '#define WIFI_SSID "%s"\n#define WIFI_PASS "%s"\n' "$WIFI_SSID" "$WIFI_PASS" > main/wifi_secret.h
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          command: idf.py build merge-bin -o badge_os_full.bin
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/badge_os.bin
+            build/badge_os_full.bin
