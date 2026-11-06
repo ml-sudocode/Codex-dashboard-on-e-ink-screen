@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
@@ -57,7 +59,7 @@ static void done(const char *l1, const char *l2) // final message, then home on 
     btn_get(-1);
 }
 
-void app_ota(void)
+static void run(void)
 {
     const char *ours = esp_app_get_description()->version;
     char s[64];
@@ -124,4 +126,18 @@ void app_ota(void)
     ui_close();
     ms(2000);
     esp_restart();
+}
+
+// The app task's stack (3.5 KB) is far too small for TLS: run on our own task and wait for it.
+static void task(void *caller)
+{
+    run();
+    xTaskNotifyGive(caller);
+    vTaskDelete(NULL);
+}
+
+void app_ota(void)
+{
+    xTaskCreate(task, "ota", 16384, xTaskGetCurrentTaskHandle(), 4, NULL);
+    ulTaskNotifyTake(true, portMAX_DELAY);
 }
