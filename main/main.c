@@ -347,6 +347,16 @@ void ui_frame(int pulls)
     ui_n++;
 }
 
+// Fast frames leave the old picture behind; driving every pixel black, then white, before a new scene
+// takes most of it off. The full cure is the 35 s clean refresh (DEVICE_INFO.md, ghosting).
+void ui_wipe(void)
+{
+    memset(fb, 0xFF, sizeof fb);
+    ui_frame(1);
+    memset(fb, 0, sizeof fb);
+    ui_frame(1);
+}
+
 void ui_close(void)
 {
     if (ui_n >= 0) epd_close();
@@ -502,9 +512,11 @@ static void home(void)
         else if (b == BTN_MINUS) sel = (sel + 1) % NAPPS; // MENU - is the right one: move right
         else {
             ESP_LOGI(TAG, "opening %s", apps[sel].name);
+            ui_wipe(); // the home screen would ghost through the app's first frame
+            ui_close();
             btn_flush();
             apps[sel].run();
-            ui_close(); // the app came back: home again, drawn clean
+            ui_wipe(); // and the app through the home screen
             btn_flush();
             pulls = 3;
         }

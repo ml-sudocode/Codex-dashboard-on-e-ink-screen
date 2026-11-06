@@ -18,6 +18,7 @@ void text(int x, int y, int scale, const char *s, bool ink); // 8x8 font, 8 * sc
 // call ui_close() when the screen will sit still for a while.
 void ui_frame(int pulls);
 void ui_close(void);
+void ui_wipe(void); // scene change: an all-black then an all-white frame shake the old picture off (~2.1 s)
 
 // Buttons as printed on the badge, a 2x2 block: MENU + top left, MENU - top right, A bottom left, B bottom right.
 enum { BTN_PLUS, BTN_MINUS, BTN_A, BTN_B };
