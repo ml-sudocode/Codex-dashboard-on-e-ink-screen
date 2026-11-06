@@ -1,6 +1,7 @@
 // Snake: 20 x 14 grid of 48 px cells, one move per panel frame (~1.07 s), walls wrap around. Nonstop: after
 // the snake bites itself its length shows for 3 s, then a new game starts by itself. MENU - turns clockwise,
-// MENU + counter-clockwise; one turn per move, the last press wins. A reboot goes home.
+// MENU + counter-clockwise; one turn per move, the last press wins. The AS5600 knob add-on steers too: an eighth
+// of a turn either way is one turn. A reboot goes home.
 #include <stdio.h>
 #include <string.h>
 #include "esp_random.h"
@@ -9,6 +10,8 @@
 #define CELL 48
 #define GW (W / CELL)
 #define GH (H / CELL)
+#define KNOB_STEP 512 // knob: an eighth of a turn turns the snake once
+#define KNOB_DIR 1    // flip to -1 if turning the knob clockwise turns the snake the wrong way
 
 static void fill_cell(int c, int inset, bool ink)
 {
@@ -20,6 +23,7 @@ void app_snake(void)
     enum { N = GW * GH };
     static int q[N]; // ring buffer of body cells, q[tl] = tail .. q[hd] = head
     static bool occ[N];
+    int ref = knob_angle(); // knob angle at the last turn, -1 = no knob
     for (;;) {
         int hd = 2, tl = 0, dir = 1, food; // dir clockwise from up: 0 up, 1 right, 2 down, 3 left
         memset(fb, 0, sizeof fb);
@@ -38,6 +42,10 @@ void app_snake(void)
             for (int b; (b = btn_get(0)) >= 0;)
                 if (b == BTN_MINUS) turn = 1;
                 else if (b == BTN_PLUS) turn = -1;
+            // ponytail: read once per move, so more than half a turn within one move reads backwards
+            int a = knob_angle(), d = ((a - ref) % 4096 + 6144) % 4096 - 2048; // -2048..2047
+            if (a < 0 || ref < 0) ref = a;
+            else if (d >= KNOB_STEP || d <= -KNOB_STEP) turn = d > 0 ? KNOB_DIR : -KNOB_DIR, ref = a;
             dir = (dir + turn + 4) % 4;
             int x = (q[hd] % GW + (dir == 1) - (dir == 3) + GW) % GW;
             int y = (q[hd] / GW + (dir == 2) - (dir == 0) + GH) % GH;
