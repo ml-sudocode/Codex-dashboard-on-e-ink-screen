@@ -31,15 +31,15 @@ static void usb_lib_task(void *arg)
     }
 }
 
-// Our own flash [addr, addr + len) to the same place on the target; flash_finish checks the MD5.
-static bool copy(esp_loader_t *ld, uint32_t addr, uint32_t len, uint32_t *done, uint32_t total)
+// Our own flash [src, src + len) to dst on the target; flash_finish checks the MD5.
+static bool copy(esp_loader_t *ld, uint32_t src, uint32_t dst, uint32_t len, uint32_t *done, uint32_t total)
 {
     static uint8_t buf[1024];
-    esp_loader_flash_cfg_t cfg = {.offset = addr, .image_size = len, .block_size = sizeof buf};
+    esp_loader_flash_cfg_t cfg = {.offset = dst, .image_size = len, .block_size = sizeof buf};
     if (esp_loader_flash_start(ld, &cfg) != ESP_LOADER_SUCCESS) return false;
     for (uint32_t off = 0; off < len; off += sizeof buf) {
         uint32_t n = MIN(sizeof buf, len - off);
-        if (esp_flash_read(NULL, buf, addr + off, n) != ESP_OK) return false;
+        if (esp_flash_read(NULL, buf, src + off, n) != ESP_OK) return false;
         if (esp_loader_flash_write(ld, &cfg, buf, n) != ESP_LOADER_SUCCESS) return false;
         *done += n;
         pct = MIN((uint64_t)*done * 100 / total, 100);
@@ -68,9 +68,11 @@ static void update_task(void *arg)
     esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
     ok = ok && esp_loader_connect(&ld, &args) == ESP_LOADER_SUCCESS;
     if (ok) pct = 0;
-    ok = ok && copy(&ld, 0x0, 0x8000, &done, total) && // bootloader
-         copy(&ld, 0x8000, 0x1000, &done, total) &&    // partition table
-         copy(&ld, app->address, img.image_len, &done, total); // app
+    // Our app goes to the target's ota_0 whichever slot runs here; erased otadata makes the target boot ota_0.
+    ok = ok && copy(&ld, 0x0, 0x0, 0x8000, &done, total) &&         // bootloader
+         copy(&ld, 0x8000, 0x8000, 0x1000, &done, total) &&        // partition table
+         copy(&ld, app->address, 0x20000, img.image_len, &done, total) && // app -> ota_0
+         esp_loader_flash_erase_region(&ld, 0xF000, 0x2000) == ESP_LOADER_SUCCESS; // otadata
     // On success the target resets and drops off USB; the port's disconnect handler (USB host task) closes the
     // device then, and a deinit here would race it. So no deinit: the app restarts after "Done".
     if (ok) esp_loader_reset_target(&ld);
