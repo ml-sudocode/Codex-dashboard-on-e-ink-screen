@@ -91,7 +91,7 @@ static void message(const char *s)
     ui_close();
 }
 
-void app_update(void)
+static void wired(void)
 {
     // usb_host_install takes the PHY from USB-Serial-JTAG until reboot, so this app never returns: it restarts.
     usb_host_install(&(usb_host_config_t){.intr_flags = ESP_INTR_FLAG_LEVEL1});
@@ -142,5 +142,36 @@ void app_update(void)
         }
         message("Update failed"); // then keep scanning: unplug, fix, plug again
         ms(3000);
+    }
+}
+
+// Chooser: online update (app_ota.c) or the wired update above. Same keys as the home screen.
+void app_update(void)
+{
+    static const char *name[2] = {"Online update", "Flash another badge"};
+    for (int sel = 0, pulls = 3;;) {
+        memset(fb, 0, sizeof fb);
+        text(48, 48, 6, "Update", true);
+        for (int i = 0; i < 2; i++) {
+            text(112, 240 + i * 200, 5, name[i], true);
+            if (i == sel) outline(80, 208 + i * 200, 800, 104, 8);
+        }
+        text(48, H - 48, 2, "MENU +/- move, A or B pick", true);
+        ui_frame(pulls);
+        pulls = 1;
+        int b = btn_get(10000);
+        if (b < 0) { // the screen sits still
+            ui_close();
+            b = btn_get(-1);
+        }
+        if (b == BTN_PLUS || b == BTN_MINUS) {
+            sel ^= 1;
+            continue;
+        }
+        ui_close();
+        btn_flush();
+        if (sel == 1) wired(); // never returns
+        app_ota();             // returning goes home; no USB host was installed on this path
+        return;
     }
 }
