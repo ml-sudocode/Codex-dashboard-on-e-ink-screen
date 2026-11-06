@@ -12,7 +12,12 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_app_desc.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_ota_ops.h"
+#include "esp_wifi.h"
+#include "freertos/event_groups.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "badge.h"
@@ -391,6 +396,46 @@ void btn_flush(void) { xQueueReset(btnq); }
 
 int btn_held(void) { return held; }
 
+// ---- Wi-Fi, on demand: Pong's ESP-NOW wants a fixed channel, an access point would pick its own.
+#if __has_include("wifi_secret.h")
+#include "wifi_secret.h" // WIFI_SSID / WIFI_PASS, gitignored; the release workflow writes it from repo secrets
+#else
+#define WIFI_SSID ""
+#define WIFI_PASS ""
+#endif
+static EventGroupHandle_t wifi_ev; // bit 0: got an IP
+
+static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (base == WIFI_EVENT) { // dropped (or never got in): keep trying
+        xEventGroupClearBits(wifi_ev, 1);
+        esp_wifi_connect();
+    } else {
+        xEventGroupSetBits(wifi_ev, 1);
+    }
+}
+
+bool wifi_connect(int timeout_ms)
+{
+    if (!*WIFI_SSID) return false;
+    if (!wifi_ev) {
+        wifi_ev = xEventGroupCreate();
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        esp_netif_create_default_wifi_sta();
+        wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&init));
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi, NULL);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL);
+        wifi_config_t c = {.sta = {.ssid = WIFI_SSID, .password = WIFI_PASS}};
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &c));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        esp_wifi_connect();
+    }
+    return xEventGroupWaitBits(wifi_ev, 1, false, true, pdMS_TO_TICKS(timeout_ms)) & 1;
+}
+
 // ---- Battery: GPIO14 (BAT_SENS) reads half of the LDO input through a 10k/10k divider. On battery that is the
 // LiPo voltage; on USB the battery is cut off from it (power path) and it reads about VBUS - 0.3 V.
 int battery_pct(void)
@@ -469,6 +514,17 @@ static void icon_pong(int x, int y) // two paddles and a ball
     for (int k = 0; k < 6; k++) box(x + 86, y + 18 + k * 26, 6, 12, false);
 }
 
+static void icon_ota(int x, int y) // a cloud with an arrow coming down out of it
+{
+    icon_base(x, y);
+    box(x + 40, y + 60, 96, 36, false);
+    box(x + 56, y + 40, 40, 30, false);
+    box(x + 84, y + 48, 32, 20, false);
+    box(x + 80, y + 96, 16, 30, true); // the arrow's shaft cuts through the cloud's bottom edge
+    box(x + 80, y + 96, 16, 30, false);
+    for (int i = 0; i < 24; i++) box(x + 88 - (24 - i), y + 124 + i, 2 * (24 - i), 1, false);
+}
+
 typedef struct {
     const char *name;
     void (*icon)(int x, int y);
@@ -478,6 +534,7 @@ typedef struct {
 static const app_t apps[] = {
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
+    {"Online", icon_ota, app_ota},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
@@ -502,6 +559,7 @@ static void home(void)
     for (int sel = 0, pulls = 3;;) {
         draw_home(sel);
         ui_frame(pulls);
+        if (pulls == 3) esp_ota_mark_app_valid_cancel_rollback(); // this version boots: keep it (rollback)
         pulls = 1;
         int b = btn_get(10000);
         if (b < 0) { // the screen sits still: end the panel session, then wait as long as it takes

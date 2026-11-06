@@ -5,6 +5,7 @@
 - **App agents:** one per app. Each owns only its own files:
   - `app-update`: `main/app_update.c`
   - `app-pong`: `main/app_pong.c`, `main/link.h`, `tools/test_link.c`
+  - `app-ota`: `main/app_ota.c`, `.github/workflows/`
 
 ## Rules for app agents
 - Work in your own git worktree on your own branch (`~/Documents/hackaday26/badge_os-<app>`, branch `app/<app>`).

@@ -150,6 +150,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
   ~250-byte packets, broadcast for pairing, unicast after.
 
 ## Flash
-- 8 MB. badge os: NVS at 0x9000 (24 KB), factory app at 0x10000 (4 MB), bootloader at 0x0, partition table at
-  0x8000. The Update app copies exactly those three: bootloader, partition table and the running app image.
+- 8 MB. badge os: bootloader at 0x0, partition table at 0x8000, NVS at 0x9000 (24 KB), otadata at 0xF000,
+  two 3 MB app slots (ota_0 at 0x20000, ota_1 at 0x320000) for online updates with rollback: a new version that
+  does not reach the home screen once is rolled back at the next boot.
 - The stock MicroPython firmware kept a LittleFS filesystem at 0x310000; it survives flashing a smaller app.
