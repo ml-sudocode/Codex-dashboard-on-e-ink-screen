@@ -540,6 +540,14 @@ static void icon_ota(int x, int y) // a cloud with an arrow coming down out of i
     for (int i = 0; i < 24; i++) box(x + 88 - (24 - i), y + 124 + i, 2 * (24 - i), 1, false);
 }
 
+static void icon_snake(int x, int y) // a snake of white squares heading for a dot
+{
+    icon_base(x, y);
+    static const int cells[][2] = {{1, 4}, {2, 4}, {3, 4}, {3, 3}, {3, 2}, {4, 2}, {5, 2}};
+    for (int i = 0; i < 7; i++) box(x + cells[i][0] * 24 + 2, y + cells[i][1] * 24 + 2, 20, 20, false);
+    box(x + 5 * 24 + 8, y + 5 * 24 + 8, 8, 8, false); // food
+}
+
 typedef struct {
     const char *name;
     void (*icon)(int x, int y);
@@ -550,6 +558,7 @@ static const app_t apps[] = {
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
     {"Online", icon_ota, app_ota},
+    {"Snake", icon_snake, app_snake},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 

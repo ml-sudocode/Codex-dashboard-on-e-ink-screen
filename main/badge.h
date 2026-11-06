@@ -36,3 +36,4 @@ int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: f
 void app_update(void);
 void app_pong(void);
 void app_ota(void);
+void app_snake(void);
