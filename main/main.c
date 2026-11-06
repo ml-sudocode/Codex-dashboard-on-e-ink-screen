@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -452,6 +453,41 @@ void wifi_off(void)
     xEventGroupClearBits(wifi_ev, 1);
 }
 
+// ---- SAO add-ons share one I2C bus: GPIO17 SDA / GPIO18 SCL, 5.1k pull-ups on the badge (DEVICE_INFO.md).
+// The knob add-on is an AS5600 magnetic encoder at 0x36 (its analog out is on the port's GPIO1, a NeoPixel on GPIO2).
+static i2c_master_bus_handle_t sao_bus;
+static i2c_master_dev_handle_t knob;
+
+static void sao_init(void) // boot: open the bus and log what answers on it
+{
+    if (i2c_new_master_bus(&(i2c_master_bus_config_t){.i2c_port = -1, .sda_io_num = 17, .scl_io_num = 18,
+                                                      .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7},
+                           &sao_bus) != ESP_OK) {
+        ESP_LOGE(TAG, "SAO I2C bus failed");
+        return;
+    }
+    for (int a = 0x08; a < 0x78; a++)
+        if (i2c_master_probe(sao_bus, a, 20) == ESP_OK) ESP_LOGI(TAG, "SAO I2C device at 0x%02x", a);
+}
+
+int knob_angle(void)
+{
+    static int64_t next_probe;
+    if (!sao_bus) return -1;
+    if (!knob) { // not seen yet: look again at most every 2 s
+        if (esp_timer_get_time() < next_probe) return -1;
+        next_probe = esp_timer_get_time() + 2000000;
+        if (i2c_master_probe(sao_bus, 0x36, 20) != ESP_OK) return -1;
+        i2c_master_bus_add_device(sao_bus, &(i2c_device_config_t){.dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                                                                   .device_address = 0x36, .scl_speed_hz = 100000},
+                                  &knob);
+        ESP_LOGI(TAG, "AS5600 knob found");
+    }
+    uint8_t reg = 0x0C, d[2]; // RAW ANGLE, 12 bits, high byte first
+    if (i2c_master_transmit_receive(knob, &reg, 1, d, 2, 20) != ESP_OK) return -1;
+    return (d[0] & 0x0F) << 8 | d[1];
+}
+
 // ---- Battery: GPIO14 (BAT_SENS) reads half of the LDO input through a 10k/10k divider. On battery that is the
 // LiPo voltage; on USB the battery is cut off from it (power path) and it reads about VBUS - 0.3 V.
 int battery_pct(void)
@@ -618,6 +654,8 @@ void app_main(void)
     ESP_ERROR_CHECK(err);
     epd_init();
     btnq = xQueueCreate(8, sizeof(int));
+    sao_init();
+    ESP_LOGI(TAG, "knob: %d", knob_angle());
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
 
     // First boot of badge os on this badge: one slow 3-colour refresh to white, because the fast waveform
