@@ -1,8 +1,10 @@
-// Pong between two badges over ESP-NOW. The game runs on a 10 x 7 grid of 96 px cells, one step per panel frame.
-// The badge with the lower MAC is the host: it owns the game and steps it; the guest shows the host's state and
-// sends its paddle. Both screens show their own player on the left. Pairing and heartbeat: link.h.
-// Any button starts pairing (press on both badges at once); in a game MENU + moves your paddle up, A down.
+// Pong between two badges over ESP-NOW, in real time: the host steps the game every STEP_MS in pixels and the
+// panel shows the latest state as fast as it can (~1 frame/s). The badge with the lower MAC is the host: it owns
+// the ball; the guest shows the host's state and sends its paddle. Both screens show their own player on the left.
+// Any button starts pairing (press on both badges at once); in a game hold MENU + to move up, A to move down.
 // Only a reboot ends a pairing; the other badge goes back to free after LINK_TIMEOUT without a packet.
+// Pairing and heartbeat: link.h.
+#include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h"
@@ -21,11 +23,18 @@
 
 static const char *TAG = "pong";
 
-#define CELL 96
-#define PW (W / CELL) // 10 x 7
-#define PH (H / CELL)
-#define PAD 2         // paddle height in cells
-#define WIN 4         // first to 4: the LED bar has 4 LEDs per player
+// Tuning knobs. The panel lags ~1 s behind the game, so the ball has to be slow enough to react to.
+#define STEP_MS 20   // game step
+#define BALL_V 3     // ball px per step across (150 px/s: ~6 s from paddle to paddle)
+#define BALL_DY 4    // steepest bounce, px per step up or down
+#define PAD_V 5      // paddle px per step while held (250 px/s)
+#define FRAME_MS 1100 // one panel frame: the hollow marker shows where the ball will be when it appears
+#define PAUSE_MS 2500 // after a point: the ball waits in the middle
+#define BALL 24
+#define PADW 16
+#define PADH 120
+#define PADX 24      // paddle's distance from its edge
+#define WIN 4        // first to 4: the LED bar has 4 LEDs per player
 #define CHANNEL 1
 #define LED_GPIO 38
 #define LED_FLIP 0    // 1 if LED 0 turns out to be on the right as you look at the badge
@@ -33,85 +42,79 @@ static const char *TAG = "pong";
 
 static TaskHandle_t game_task;
 static link_t lk;
-static game_t g;     // host: the game; guest: the host's latest, but g.py[1] is its own paddle
-static uint8_t seen; // last tick the guest has shown (host: as the guest reported it)
+static game_t g; // host: the game; guest: the host's latest, but g.py[1] is its own paddle
 static bool host;
 static volatile bool in_pong;
 static portMUX_TYPE gmux = portMUX_INITIALIZER_UNLOCKED;
 
-// mirror: the guest flips the court so its own paddle (player 1) is on the left.
-static void draw(const game_t *s, bool mirror)
+// Ball y after moving dy per step for n steps, bouncing off top and bottom.
+static int fold_y(int y, int dy, int n)
 {
+    int span = H - BALL, v = abs(y + dy * n) % (2 * span);
+    return v > span ? 2 * span - v : v;
+}
+
+// mirror: the guest flips the court so its own paddle (player 1) is on the left. live: draw the ball.
+static void draw(const game_t *s, bool mirror, bool live)
+{
+#define X(x, w) (mirror ? W - (x) - (w) : (x))
     memset(fb, 0, PLANE);
     for (int y = 0; y < H; y += 48) box(W / 2 - 4, y + 12, 8, 24, true); // centre line
-    if (s->tick) box(0, 0, 8, H, true); // your side: the left one, with a goal line
+    if (live) box(0, 0, 8, H, true); // your side: the left one, with a goal line
     for (int p = 0; p < 2; p++) {
         bool left = (p == 0) != mirror;
-        int x = (left ? 0 : PW - 1) * CELL + 32, y = s->py[p] * CELL + 8, h = PAD * CELL - 16;
-        if (left) box(x, y, 32, h, true); // yours solid, the other badge's hollow
-        else outline(x, y, 32, h, 8);
+        int x = left ? PADX : W - PADX - PADW;
+        if (left) box(x, s->py[p], PADW, PADH, true); // yours solid, the other badge's hollow
+        else outline(x, s->py[p], PADW, PADH, 4);
         for (int k = 0; k < s->score[p]; k++) box(left ? W / 2 - 60 - 48 * k : W / 2 + 36 + 48 * k, 12, 24, 24, true);
     }
-    if (!s->tick) return; // not served yet
-    box((mirror ? PW - 1 - s->bx : s->bx) * CELL + 12, s->by * CELL + 12, CELL - 24, CELL - 24, true);
-    if (s->bx == 0 || s->bx == PW - 1) return; // a point: no next position
-    int nx = s->bx + s->dx, ny = s->by + s->dy;
-    if (ny < 0 || ny >= PH) ny = s->by - s->dy;
-    outline((mirror ? PW - 1 - nx : nx) * CELL + 18, ny * CELL + 18, CELL - 36, CELL - 36, 6); // where it goes next
+    if (!live) return;
+    box(X(s->bx, BALL), s->by, BALL, BALL, true);
+    if (!s->dx) return; // waiting to serve
+    int n = FRAME_MS / STEP_MS, fx = MIN(MAX(s->bx + s->dx * n, PADX + PADW), W - PADX - PADW - BALL);
+    outline(X(fx, BALL), fold_y(s->by, s->dy, n), BALL, BALL, 3); // where it is when this frame shows
+#undef X
 }
 
-static void serve(game_t *g, int dir)
+// Host only: one game step. sdx: direction of the next serve; serve_at: 0 while the ball is in play.
+static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, uint32_t rnd)
 {
-    g->bx = dir > 0 ? PW / 2 - 1 : PW / 2;
-    g->by = esp_random() % PH;
-    g->dx = dir;
-    g->dy = esp_random() & 1 ? 1 : -1;
-}
-
-// Host only: one game step.
-static void pong_tick(game_t *g)
-{
-    if (!++g->tick) g->tick = 1; // 0 means "not started"
-    if (g->bx == 0 || g->bx == PW - 1) { // last step was a point: serve towards whoever lost it
+    if (*serve_at) {
+        if (now < *serve_at) return;
         if (g->score[0] == WIN || g->score[1] == WIN) g->score[0] = g->score[1] = 0;
-        serve(g, g->bx ? 1 : -1);
-        return;
+        g->dx = *sdx, g->dy = (1 + rnd / 2 % BALL_DY) * (rnd & 1 ? 1 : -1), *serve_at = 0;
     }
-    int y = g->by + g->dy;
-    if (y < 0 || y >= PH) g->dy = -g->dy, y = g->by + g->dy; // wall
-    int x = g->bx + g->dx;
-    if (x == 0 || x == PW - 1) {
-        int p = x != 0;
-        if (y >= g->py[p] && y < g->py[p] + PAD) g->dx = -g->dx, x = g->bx + g->dx; // paddle: back again
-        else g->score[!p]++; // missed: the ball goes into the gutter
+    g->bx += g->dx;
+    g->by += g->dy;
+    if (g->by < 0 || g->by > H - BALL) g->by = fold_y(g->by, 0, 0), g->dy = -g->dy; // wall
+    int p = g->dx > 0, face = p ? W - PADX - PADW - BALL : PADX + PADW; // ball x where it touches paddle p
+    bool crossed = p ? g->bx >= face && g->bx - g->dx < face : g->bx <= face && g->bx - g->dx > face;
+    int off = g->by + BALL / 2 - (g->py[p] + PADH / 2); // ball centre from paddle centre
+    if (crossed && abs(off) < (PADH + BALL) / 2) { // paddle: back, steeper the further from its centre
+        g->bx = 2 * face - g->bx, g->dx = -g->dx;
+        g->dy = off * BALL_DY / ((PADH + BALL) / 2);
+    } else if (g->bx < -BALL || g->bx > W) { // missed: a point, then serve towards whoever lost it
+        g->score[!p]++;
+        *sdx = p ? BALL_V : -BALL_V;
+        g->bx = (W - BALL) / 2, g->by = (H - BALL) / 2, g->dx = g->dy = 0;
+        *serve_at = now + PAUSE_MS;
     }
-    g->bx = x;
-    g->by = y;
 }
 
-// Lockstep at the panel's ~1 frame/s: the host steps only after the guest has shown the last step, so both
-// players see every step for a whole frame. After a point frame both badges close the panel session, so the
-// reopen (~0.85 s) lands in that pause and the OS's forced reopen every 20 frames rarely hits a rally.
+// Renders the latest state as fast as the panel goes. After a point both badges close the panel session, so
+// the reopen (~0.85 s) lands in the pause and the OS's forced reopen every 20 frames rarely hits a rally.
 static void pong(void)
 {
     ESP_LOGI(TAG, "%s, %s paddle", host ? "host" : "guest", host ? "left" : "right");
     in_pong = true;
-    int frames = 0;
-    for (uint8_t drawn = 0; lk.state == L_PAIRED;) {
+    int frames = 0, points = 0;
+    while (lk.state == L_PAIRED) {
         taskENTER_CRITICAL(&gmux);
-        bool go = host ? seen == g.tick : g.tick != drawn;
-        if (go && host) pong_tick(&g);
         game_t s = g;
         taskEXIT_CRITICAL(&gmux);
-        if (!go) {
-            ms(20);
-            continue;
-        }
-        draw(&s, !host);
+        draw(&s, !host, true);
         ui_frame(frames++ ? 1 : 3);
-        if (s.bx == 0 || s.bx == PW - 1) ui_close(); // a point: restart the session in the pause
-        drawn = s.tick;
-        if (!host) seen = drawn;
+        if (s.score[0] + s.score[1] != points) ui_close(), points = s.score[0] + s.score[1];
     }
     ui_close();
     in_pong = false;
@@ -162,8 +165,8 @@ static void led_update(int64_t now, int64_t red_until)
         fill = s.score[me] == WIN ? 1 : s.score[!me] == WIN ? 0 : -1;
         for (int k = 0; k < s.score[me]; k++) c[k][1] = LED_ON;
         for (int k = 0; k < s.score[!me]; k++) c[7 - k][0] = LED_ON;
-        int col = host ? s.bx : PW - 1 - s.bx;
-        if (s.tick) memset(c[(col * 7 + 4) / 9], LED_ON, 3);
+        int x = (host ? s.bx : W - BALL - s.bx) + BALL / 2;
+        memset(c[MIN(MAX(x * 8 / W, 0), 7)], LED_ON, 3); // live ball position
     }
     if (fill >= 0)
         for (int i = 0; i < 8; i++) memset(c[i], 0, 3), c[i][fill] = LED_ON;
@@ -202,23 +205,25 @@ static void radio_start(void)
     ESP_LOGI(TAG, "ESP-NOW on channel %d, me " MACSTR, CHANNEL, MAC2STR(lk.me));
 }
 
-// Every 10 ms or per packet: buttons, link.h, sends, applies game packets, drives the LEDs.
+// Every 10 ms or per packet: buttons, game step, link.h, sends, applies game packets, drives the LEDs.
 static void link_task(void *arg)
 {
     int was = L_FREE;
-    int64_t next_tx = 0, red_until = 0;
+    int64_t next_tx = 0, red_until = 0, next_step = 0, serve_at = 0;
+    int8_t sdx = 0;
     for (;;) {
         rx_t r;
         bool got = xQueueReceive(rxq, &r, pdMS_TO_TICKS(10));
         int64_t now = esp_timer_get_time() / 1000;
-        for (int b; (b = btn_get(0)) >= 0;) {
-            link_press(&lk, now); // ignored once paired
-            if ((b == BTN_PLUS || b == BTN_A) && in_pong) {
-                taskENTER_CRITICAL(&gmux);
-                uint8_t *y = &g.py[!host];
-                *y = b == BTN_PLUS ? MAX(*y - 1, 0) : MIN(*y + 1, PH - PAD);
-                taskEXIT_CRITICAL(&gmux);
-            }
+        while (btn_get(0) >= 0) link_press(&lk, now); // any button pairs; ignored once paired
+        if (in_pong && now >= next_step) {
+            next_step = now + STEP_MS;
+            int held = btn_held(), v = (held >> BTN_A & 1) - (held >> BTN_PLUS & 1);
+            uint32_t rnd = esp_random();
+            taskENTER_CRITICAL(&gmux);
+            g.py[!host] = MIN(MAX(g.py[!host] + v * PAD_V, 0), H - PADH);
+            if (host) pong_step(&g, now, &sdx, &serve_at, rnd);
+            taskEXIT_CRITICAL(&gmux);
         }
         if (got) link_rx(&lk, r.src, &r.p, now);
         link_tick(&lk, now);
@@ -230,8 +235,9 @@ static void link_task(void *arg)
                 esp_now_add_peer(&pi);
                 taskENTER_CRITICAL(&gmux);
                 host = memcmp(lk.me, lk.peer, 6) < 0;
-                g = (game_t){.py = {2, 2}};
-                seen = 0;
+                g = (game_t){.bx = (W - BALL) / 2, .by = (H - BALL) / 2, .py = {(H - PADH) / 2, (H - PADH) / 2}};
+                sdx = esp_random() & 1 ? BALL_V : -BALL_V;
+                serve_at = now + PAUSE_MS;
                 taskEXIT_CRITICAL(&gmux);
                 xTaskNotifyGive(game_task);
             }
@@ -242,10 +248,9 @@ static void link_task(void *arg)
         if (got && lk.state == L_PAIRED && r.p.type == P_GAME && !memcmp(r.src, lk.peer, 6)) {
             taskENTER_CRITICAL(&gmux);
             if (host) {
-                g.py[1] = MIN(r.p.g.py[1], PH - PAD);
-                seen = r.p.seen;
+                g.py[1] = MIN(MAX(r.p.g.py[1], 0), H - PADH);
             } else {
-                uint8_t mine = g.py[1];
+                int16_t mine = g.py[1];
                 g = r.p.g;
                 g.py[1] = mine;
             }
@@ -256,7 +261,6 @@ static void link_task(void *arg)
         if (to && now >= next_tx) {
             taskENTER_CRITICAL(&gmux);
             p.g = g;
-            p.seen = seen;
             taskEXIT_CRITICAL(&gmux);
             esp_now_send(to, (const uint8_t *)&p, sizeof p);
             next_tx = now + (lk.state == L_SEEK ? LINK_PAIR_MS : LINK_GAME_MS);
@@ -274,7 +278,7 @@ void app_pong(void)
     radio_start();
     xTaskCreate(link_task, "link", 4096, NULL, 6, NULL);
     for (;;) { // unpaired: an empty court, then wait for the link task to pair
-        draw(&(game_t){.py = {2, 2}}, false);
+        draw(&(game_t){.py = {(H - PADH) / 2, (H - PADH) / 2}}, false, false);
         ui_frame(3);
         ui_close();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);

@@ -17,9 +17,9 @@ enum { L_FREE, L_SEEK, L_PAIRED };
 enum { P_PAIR = 1, P_GAME = 2 };
 
 typedef struct __attribute__((packed)) {
-    uint8_t tick;          // host's game step, never 0 once running
-    int8_t bx, by, dx, dy; // ball cell and direction
-    uint8_t py[2];         // paddle top row: [0] host (left), [1] guest (right)
+    int16_t bx, by;        // ball top left, px, in the host's view (host's paddle on the left)
+    int8_t dx, dy;         // ball px per game step
+    int16_t py[2];         // paddle top, px: [0] host (left), [1] guest (right)
     uint8_t score[2];
 } game_t;
 
@@ -28,7 +28,6 @@ typedef struct __attribute__((packed)) {
     uint8_t type;    // P_PAIR (broadcast) or P_GAME (unicast)
     uint16_t age;    // P_PAIR: ms since the sender's A press
     uint8_t peer[6]; // the sender's choice (P_PAIR, zero while undecided) or its peer (P_GAME)
-    uint8_t seen;    // guest: last tick it has shown
     game_t g;        // host: the game; guest: only g.py[1] counts
 } pkt_t;
 
