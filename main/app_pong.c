@@ -11,7 +11,6 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/rmt_tx.h"
-#include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_now.h"
@@ -188,12 +187,7 @@ static void radio_rx(const esp_now_recv_info_t *info, const uint8_t *data, int l
 
 static void radio_start(void)
 {
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&init));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    wifi_on(); // the OS's driver: station mode, no network joined
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // modem sleep would drop packets
     ESP_ERROR_CHECK(esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_now_init());
