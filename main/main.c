@@ -470,14 +470,45 @@ static void sao_init(void) // boot: open the bus and log what answers on it
         if (i2c_master_probe(sao_bus, a, 20) == ESP_OK) ESP_LOGI(TAG, "SAO I2C device at 0x%02x", a);
 }
 
+// The AS5600 also drives its angle as a voltage (0-3.3 V over a turn) on its port's GPIO1. The knob in SAO1 does not
+// answer on I2C, so read that: SAO1's GPIO1 is GPIO2 (ADC1). A floating pin follows the pull resistors, a driven one
+// does not: that tells a plugged knob from an empty slot.
+static int knob_analog(int *up_mv, int *down_mv)
+{
+    enum { PIN = 2 };
+    static adc_oneshot_unit_handle_t adc;
+    static adc_cali_handle_t cali;
+    static adc_channel_t ch;
+    if (!adc) {
+        adc_unit_t unit;
+        adc_oneshot_io_to_channel(PIN, &unit, &ch);
+        adc_oneshot_new_unit(&(adc_oneshot_unit_init_cfg_t){.unit_id = unit}, &adc);
+        adc_oneshot_config_channel(adc, ch, &(adc_oneshot_chan_cfg_t){.atten = ADC_ATTEN_DB_12});
+        adc_cali_create_scheme_curve_fitting(&(adc_cali_curve_fitting_config_t){.unit_id = unit, .chan = ch,
+                                                                                .atten = ADC_ATTEN_DB_12}, &cali);
+    }
+    if (!cali) return -1;
+    int mv[2];
+    for (int k = 0; k < 2; k++) { // with the pull-up, then with the pull-down
+        gpio_set_pull_mode(PIN, k ? GPIO_PULLDOWN_ONLY : GPIO_PULLUP_ONLY);
+        int sum = 0, v;
+        for (int i = 0; i < 4; i++) sum += adc_oneshot_get_calibrated_result(adc, cali, ch, &v) == ESP_OK ? v : 0;
+        mv[k] = sum / 4;
+    }
+    gpio_set_pull_mode(PIN, GPIO_FLOATING);
+    if (up_mv) *up_mv = mv[0], *down_mv = mv[1];
+    if (abs(mv[0] - mv[1]) > 300) return -1; // floating: no knob
+    return MIN((mv[0] + mv[1]) / 2 * 4096 / 3300, 4095);
+}
+
 int knob_angle(void)
 {
     static int64_t next_probe;
-    if (!sao_bus) return -1;
-    if (!knob) { // not seen yet: look again at most every 2 s
-        if (esp_timer_get_time() < next_probe) return -1;
+    if (!sao_bus) return knob_analog(NULL, NULL);
+    if (!knob) { // not seen on I2C yet: look again at most every 2 s, use the analog out meanwhile
+        if (esp_timer_get_time() < next_probe) return knob_analog(NULL, NULL);
         next_probe = esp_timer_get_time() + 2000000;
-        if (i2c_master_probe(sao_bus, 0x36, 20) != ESP_OK) return -1;
+        if (i2c_master_probe(sao_bus, 0x36, 20) != ESP_OK) return knob_analog(NULL, NULL);
         i2c_master_bus_add_device(sao_bus, &(i2c_device_config_t){.dev_addr_length = I2C_ADDR_BIT_LEN_7,
                                                                    .device_address = 0x36, .scl_speed_hz = 100000},
                                   &knob);
@@ -655,7 +686,8 @@ void app_main(void)
     epd_init();
     btnq = xQueueCreate(8, sizeof(int));
     sao_init();
-    ESP_LOGI(TAG, "knob: %d", knob_angle());
+    int up, down;
+    ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
 
     // First boot of badge os on this badge: one slow 3-colour refresh to white, because the fast waveform
