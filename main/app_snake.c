@@ -1,4 +1,4 @@
-// Snake: 20 x 14 grid of 48 px cells, a move every MOVE_MS, walls wrap around. Nonstop: after
+// Snake: 20 x 14 grid of 48 px cells, at most a move every MOVE_MS, walls wrap around. Nonstop: after
 // the snake bites itself its length shows for 3 s, then a new game starts by itself. MENU - turns clockwise,
 // MENU + counter-clockwise; presses queue, one turn per move. The AS5600 knob add-on steers too: an eighth
 // of a turn either way is one turn. A reboot goes home.
@@ -11,7 +11,7 @@
 #define CELL 48
 #define GW (W / CELL)
 #define GH (H / CELL)
-#define MOVE_MS 350 // the speed: one move every MOVE_MS; frames come as fast as the changed rows allow
+#define MOVE_MS 350 // the speed: at most one move every MOVE_MS (the panel is slower on the low rows)
 #define KNOB_STEP 512 // knob: an eighth of a turn turns the snake once
 #define KNOB_DIR 1    // flip to -1 if turning the knob clockwise turns the snake the wrong way
 
@@ -69,16 +69,12 @@ void app_snake(void)
                 do food = esp_random() % N; while (occ[food]);
                 fill_cell(food, 16, true);
             }
-            // a frame costs ~949 ms x (lowest changed row / 672): when it runs past a move, the next moves catch
-            // up undrawn, so the game keeps its speed and the snake jumps a few cells on the low rows
+            // every move is drawn, so a turn can land on any cell. A frame costs ~949 ms x (lowest changed row / 672):
+            // near the top the snake moves every MOVE_MS, lower down as fast as the panel allows
+            ui_frame(1);
             int64_t now = esp_timer_get_time() / 1000;
-            if (now > next + 2000) next = now; // a session reopen: do not race to catch up
-            if (now < next) {
-                ui_frame(1);
-                now = esp_timer_get_time() / 1000;
-                if (now < next) ms(next - now);
-            }
-            next += MOVE_MS;
+            if (now < next) ms(next - now), now = next;
+            next = now + MOVE_MS;
         }
         char s[16];
         int n = snprintf(s, sizeof s, " LENGTH %d ", (hd - tl + N) % N + 1);
