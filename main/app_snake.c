@@ -1,16 +1,17 @@
-// Snake: 20 x 14 grid of 48 px cells, MOVES moves per panel frame (~1.07 s), walls wrap around. Nonstop: after
+// Snake: 20 x 14 grid of 48 px cells, a move every MOVE_MS, walls wrap around. Nonstop: after
 // the snake bites itself its length shows for 3 s, then a new game starts by itself. MENU - turns clockwise,
 // MENU + counter-clockwise; presses queue, one turn per move. The AS5600 knob add-on steers too: an eighth
 // of a turn either way is one turn. A reboot goes home.
 #include <stdio.h>
 #include <string.h>
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "badge.h"
 
 #define CELL 48
 #define GW (W / CELL)
 #define GH (H / CELL)
-#define MOVES 3 // moves per panel frame (~1.07 s, the panel's floor): the speed
+#define MOVE_MS 350 // the speed: one move every MOVE_MS; frames come as fast as the changed rows allow
 #define KNOB_STEP 512 // knob: an eighth of a turn turns the snake once
 #define KNOB_DIR 1    // flip to -1 if turning the knob clockwise turns the snake the wrong way
 
@@ -38,7 +39,8 @@ void app_snake(void)
         fill_cell(food, 16, true);
         btn_flush();
         ui_frame(3);
-        for (int m = 1;; m++) {
+        int64_t next = esp_timer_get_time() / 1000 + MOVE_MS;
+        for (;;) {
             // one queued turn per move, so two quick presses make two turns within a frame
             int b = btn_get(0), turn = b == BTN_MINUS ? 1 : b == BTN_PLUS ? -1 : 0;
             int a = knob_angle(), d = ((a - ref) % 4096 + 6144) % 4096 - 2048; // -2048..2047
@@ -67,7 +69,16 @@ void app_snake(void)
                 do food = esp_random() % N; while (occ[food]);
                 fill_cell(food, 16, true);
             }
-            if (m % MOVES == 0) ui_frame(1);
+            // a frame costs ~949 ms x (lowest changed row / 672): when it runs past a move, the next moves catch
+            // up undrawn, so the game keeps its speed and the snake jumps a few cells on the low rows
+            int64_t now = esp_timer_get_time() / 1000;
+            if (now > next + 2000) next = now; // a session reopen: do not race to catch up
+            if (now < next) {
+                ui_frame(1);
+                now = esp_timer_get_time() / 1000;
+                if (now < next) ms(next - now);
+            }
+            next += MOVE_MS;
         }
         char s[16];
         int n = snprintf(s, sizeof s, " LENGTH %d ", (hd - tl + N) % N + 1);
