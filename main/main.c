@@ -15,6 +15,7 @@
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_rom_crc.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_wifi.h"
@@ -91,18 +92,20 @@ static uint8_t rev(uint8_t b)
     return (b & 0xAA) >> 1 | (b & 0x55) << 1;
 }
 
-// A CoG takes its 60 bytes of every row of one plane in one burst. plane NULL = all white.
-static void send_half(int cog, uint8_t index, const uint8_t *plane)
+// Rows y0..y1 of one plane into one CoG's RAM: its 60 bytes of every row, bit-reversed, the RAM pointer counting
+// down from x 0x3B (RAM_RW {x1, y0 lo, 0x14 | y0 >> 8}: panel_lab experiment 02). plane NULL = all white.
+static void send_rows(int cog, uint8_t index, const uint8_t *plane, int y0, int y1)
 {
     static DMA_ATTR uint8_t buf[HALF];
     const uint8_t *src = plane ? plane + (cog == RIGHT ? W / 16 : 0) : NULL;
-    for (int y = 0; y < H; y++)
+    int n = 0;
+    for (int y = y0; y <= y1; y++)
         for (int x = 0; x < W / 16; x++) {
             uint8_t b = src ? src[y * (W / 8) + x] : 0;
-            buf[y * (W / 16) + x] = REVERSE_BITS ? rev(b) : b;
+            buf[n++] = REVERSE_BITS ? rev(b) : b;
         }
-    CMD(cog, 0x12, 0x3B, 0x00, 0x14); // RAM_RW
-    cmd(cog, index, buf, HALF);
+    CMD(cog, 0x12, 0x3B, y0 & 0xFF, 0x14 | y0 >> 8); // RAM_RW
+    cmd(cog, index, buf, n);
 }
 
 // A panel session: epd_open (reset, frame data, register sequence, DC-DC up), any number of
@@ -195,9 +198,16 @@ static void epd_load(const uint8_t *black, const uint8_t *red, bool with_red)
     CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW: 60 bytes x 672 lines
     CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);             // DRFW: whole panel
     for (int cog = LEFT; cog <= RIGHT; cog++) {
-        send_half(cog, 0x10, black);
-        if (with_red) send_half(cog, 0x11, red);
+        send_rows(cog, 0x10, black, 0, H - 1);
+        if (with_red) send_rows(cog, 0x11, red, 0, H - 1);
     }
+}
+
+// Only rows y0..y1 of the black plane (the DUW window limits the RAM write to those lines).
+static void epd_load_rows(const uint8_t *black, int y0, int y1)
+{
+    CMD(BOTH, 0x13, 0x00, 0x3B, y0 & 0xFF, y0 >> 8, y1 & 0xFF, y1 >> 8); // DUW
+    for (int cog = LEFT; cog <= RIGHT; cog++) send_rows(cog, 0x10, black, y0, y1);
 }
 
 static void dcdc_on(void)
@@ -339,19 +349,37 @@ void text(int x, int y, int scale, const char *s, bool ink)
 }
 
 // ---- Panel frames: one short-waveform session shared by consecutive frames, a fresh one every 20 (badge team).
-static int ui_n = -1; // frames shown in the open session, -1 = none open
+static int ui_n = -1;       // frames shown in the open session, -1 = none open
+static uint32_t row_crc[H]; // CRC32 of every row as last sent to the panel: ui_frame diffs against it
+static bool row_crc_ok;     // false until the first frame: what the panel shows at boot is unknown
 
+// Apps draw into fb; ui_frame works out which rows changed since the last frame and refreshes only those. The panel
+// scans from the top down to the refresh window's bottom edge, so a frame costs ~949 ms x (last changed row / 672),
+// and rows outside the window are not driven at all (panel_lab FINDINGS.md, refresh window). Less scan time also
+// means less drive per pixel: a band high up comes out lighter than a full frame from the same pulls.
 void ui_frame(int pulls)
 {
-    if (ui_n < 0 || ui_n == 20) {
+    int y0 = H, y1 = -1;
+    for (int y = 0; y < H; y++) {
+        uint32_t c = esp_rom_crc32_le(0, fb + y * (W / 8), W / 8);
+        if (c != row_crc[y] || !row_crc_ok) row_crc[y] = c, y0 = MIN(y0, y), y1 = y;
+    }
+    row_crc_ok = true;
+    if (y1 < 0) { // nothing changed, nothing to draw
+        ms(1);
+        return;
+    }
+    if (ui_n < 0 || ui_n == 20) { // a fresh session every 20 frames (badge team); opening loads the whole frame
         if (ui_n == 20) epd_close();
         epd_open(fb, NULL, true);
         ui_n = 0;
     } else {
-        epd_load(fb, NULL, false);
+        epd_load_rows(fb, y0, y1);
     }
-    epd_pull(pulls, 5000);
+    CMD(BOTH, 0x90, 0x00, 0x3B, MAX(0, y0 / 4 - 1), MIN(0xA9, y1 / 4 + 3)); // DRFW, 4-line units, 1-unit margin
+    int t = epd_pull(pulls, 5000);
     ui_n++;
+    ESP_LOGI(TAG, "frame: rows %d-%d, %d pull(s), %d ms", y0, y1, pulls, t);
 }
 
 // Fast frames leave the old picture behind; driving every pixel black, then white, before a new scene
