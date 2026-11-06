@@ -2,6 +2,7 @@
 // panel shows the latest state as fast as it can (~1 frame/s). The badge with the lower MAC is the host: it owns
 // the ball; the guest shows the host's state and sends its paddle. Both screens show their own player on the left.
 // Any button starts pairing (press on both badges at once); in a game hold MENU + to move up, A to move down.
+// An AS5600 knob on the SAO I2C bus, if present at start, moves the paddle too.
 // Only a reboot ends a pairing; the other badge goes back to free after LINK_TIMEOUT without a packet.
 // Pairing and heartbeat: link.h.
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "driver/i2c_master.h"
 #include "driver/rmt_tx.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -39,6 +41,8 @@ static const char *TAG = "pong";
 #define LED_GPIO 38
 #define LED_FLIP 0    // 1 if LED 0 turns out to be on the right as you look at the badge
 #define LED_ON 12     // WS2812 brightness, 0-255
+#define KNOB_TURN (H - PADH) // paddle px per full knob turn: one turn crosses the court
+#define KNOB_DIR 1    // -1 if turning clockwise moves the paddle up instead of down
 
 static TaskHandle_t game_task;
 static link_t lk;
@@ -180,6 +184,31 @@ static void led_update(int64_t now, int64_t red_until)
     leds(c);
 }
 
+// ---- Knob: AS5600 magnetic encoder (I2C 0x36) on the SAO bus, GPIO17 SDA / GPIO18 SCL, 5.1k pull-ups on board.
+static i2c_master_dev_handle_t knob; // NULL: no knob found at start
+
+static void knob_init(void)
+{
+    i2c_master_bus_handle_t bus;
+    if (i2c_new_master_bus(&(i2c_master_bus_config_t){.i2c_port = -1, .sda_io_num = 17, .scl_io_num = 18,
+                                                      .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7}, &bus) ||
+        i2c_master_probe(bus, 0x36, 50)) {
+        ESP_LOGI(TAG, "no AS5600 knob");
+        return;
+    }
+    i2c_master_bus_add_device(bus, &(i2c_device_config_t){.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x36,
+                                                          .scl_speed_hz = 400000}, &knob);
+    ESP_LOGI(TAG, "AS5600 knob found");
+}
+
+// Raw angle, 0-4095 per turn; -1 without a knob or on a bus error.
+static int knob_raw(void)
+{
+    uint8_t reg = 0x0C, d[2]; // RAW ANGLE, high byte first
+    if (!knob || i2c_master_transmit_receive(knob, &reg, 1, d, 2, 10)) return -1;
+    return (d[0] & 15) << 8 | d[1];
+}
+
 // ---- Radio: ESP-NOW only (no AP), packets go through a queue to the link task.
 typedef struct { uint8_t src[6]; pkt_t p; } rx_t;
 static QueueHandle_t rxq;
@@ -212,6 +241,7 @@ static void link_task(void *arg)
 {
     int was = L_FREE;
     int64_t next_tx = 0, red_until = 0, next_step = 0, serve_at = 0;
+    int knob_last = -1, knob_acc = 0; // knob: last angle, turned but not yet moved (x 4096)
     int8_t sdx = 0;
     for (;;) {
         rx_t r;
@@ -221,9 +251,14 @@ static void link_task(void *arg)
         if (in_pong && now >= next_step) {
             next_step = now + STEP_MS;
             int held = btn_held(), v = (held >> BTN_A & 1) - (held >> BTN_PLUS & 1);
+            int k = knob_raw();
+            if (k >= 0 && knob_last >= 0) knob_acc += ((k - knob_last + 6144) % 4096 - 2048) * KNOB_DIR * KNOB_TURN;
+            knob_last = k;
+            v = v * PAD_V + knob_acc / 4096; // relative: turning moves the paddle from wherever it is
+            knob_acc %= 4096;
             uint32_t rnd = esp_random();
             taskENTER_CRITICAL(&gmux);
-            g.py[!host] = MIN(MAX(g.py[!host] + v * PAD_V, 0), H - PADH);
+            g.py[!host] = MIN(MAX(g.py[!host] + v, 0), H - PADH);
             if (host) pong_step(&g, now, &sdx, &serve_at, rnd);
             if (g.dx) { // the trail skips the wait before a serve
                 int16_t *t = trail[trail_n++ % TRAIL];
@@ -281,6 +316,7 @@ void app_pong(void)
 {
     game_task = xTaskGetCurrentTaskHandle();
     led_init();
+    knob_init();
     rxq = xQueueCreate(16, sizeof(rx_t));
     radio_start();
     xTaskCreate(link_task, "link", 4096, NULL, 6, NULL);
