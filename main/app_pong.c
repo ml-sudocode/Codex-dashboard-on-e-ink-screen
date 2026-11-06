@@ -24,8 +24,8 @@ static const char *TAG = "pong";
 
 // Tuning knobs. The panel lags ~1 s behind the game, so the ball has to be slow enough to react to.
 #define STEP_MS 20   // game step
-#define BALL_V 3     // ball px per step across (150 px/s: ~6 s from paddle to paddle)
-#define BALL_DY 4    // steepest bounce, px per step up or down
+#define BALL_V 2     // ball px per step across (100 px/s: ~9 s from paddle to paddle)
+#define BALL_DY 3    // steepest bounce, px per step up or down
 #define PAD_V 5      // paddle px per step while held (250 px/s)
 #define FRAME_MS 1100 // one panel frame: the hollow marker shows where the ball will be when it appears
 #define PAUSE_MS 2500 // after a point: the ball waits in the middle
@@ -33,6 +33,7 @@ static const char *TAG = "pong";
 #define PADW 16
 #define PADH 120
 #define PADX 24      // paddle's distance from its edge
+#define TRAIL 64     // ball positions kept for the trail, one per step (~1.3 s)
 #define WIN 4        // first to 4: the LED bar has 4 LEDs per player
 #define CHANNEL 1
 #define LED_GPIO 38
@@ -44,6 +45,8 @@ static link_t lk;
 static game_t g; // host: the game; guest: the host's latest, but g.py[1] is its own paddle
 static bool host;
 static volatile bool in_pong;
+static int16_t trail[TRAIL][2]; // ring of recent ball positions, trail_n is the next slot
+static int trail_n;
 static portMUX_TYPE gmux = portMUX_INITIALIZER_UNLOCKED;
 
 // Ball y after moving dy per step for n steps, bouncing off top and bottom.
@@ -54,7 +57,7 @@ static int fold_y(int y, int dy, int n)
 }
 
 // mirror: the guest flips the court so its own paddle (player 1) is on the left. live: draw the ball.
-static void draw(const game_t *s, bool mirror, bool live)
+static void draw(const game_t *s, const int16_t (*tr)[2], int ntr, bool mirror, bool live)
 {
 #define X(x, w) (mirror ? W - (x) - (w) : (x))
     memset(fb, 0, PLANE);
@@ -68,6 +71,8 @@ static void draw(const game_t *s, bool mirror, bool live)
         for (int k = 0; k < s->score[p]; k++) box(left ? W / 2 - 60 - 48 * k : W / 2 + 36 + 48 * k, 12, 24, 24, true);
     }
     if (!live) return;
+    for (int k = 0; k < MIN(ntr, TRAIL); k += 6) // the trail: a dot every 6 steps, where the ball has been
+        box(X(tr[k][0] + BALL / 2 - 4, 8), tr[k][1] + BALL / 2 - 4, 8, 8, true);
     box(X(s->bx, BALL), s->by, BALL, BALL, true);
     if (!s->dx) return; // waiting to serve
     int n = FRAME_MS / STEP_MS, fx = MIN(MAX(s->bx + s->dx * n, PADX + PADW), W - PADX - PADW - BALL);
@@ -91,7 +96,7 @@ static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, ui
     int off = g->by + BALL / 2 - (g->py[p] + PADH / 2); // ball centre from paddle centre
     if (crossed && abs(off) < (PADH + BALL) / 2) { // paddle: back, steeper the further from its centre
         g->bx = 2 * face - g->bx, g->dx = -g->dx;
-        g->dy = off * BALL_DY / ((PADH + BALL) / 2);
+        g->dy = off * BALL_DY / ((PADH + BALL) / 2) ?: (off < 0 ? -1 : 1); // never flat: no endless rally
     } else if (g->bx < -BALL || g->bx > W) { // missed: a point, then serve towards whoever lost it
         g->score[!p]++;
         *sdx = p ? BALL_V : -BALL_V;
@@ -110,8 +115,11 @@ static void pong(void)
     while (lk.state == L_PAIRED) {
         taskENTER_CRITICAL(&gmux);
         game_t s = g;
+        int16_t tr[TRAIL][2];
+        int ntr = trail_n;
+        memcpy(tr, trail, sizeof tr);
         taskEXIT_CRITICAL(&gmux);
-        draw(&s, !host, true);
+        draw(&s, tr, ntr, !host, true);
         ui_frame(frames++ ? 1 : 3);
         if (s.score[0] + s.score[1] != points) ui_close(), points = s.score[0] + s.score[1];
     }
@@ -217,6 +225,10 @@ static void link_task(void *arg)
             taskENTER_CRITICAL(&gmux);
             g.py[!host] = MIN(MAX(g.py[!host] + v * PAD_V, 0), H - PADH);
             if (host) pong_step(&g, now, &sdx, &serve_at, rnd);
+            if (g.dx) { // the trail skips the wait before a serve
+                int16_t *t = trail[trail_n++ % TRAIL];
+                t[0] = g.bx, t[1] = g.by;
+            }
             taskEXIT_CRITICAL(&gmux);
         }
         if (got) link_rx(&lk, r.src, &r.p, now);
@@ -232,6 +244,7 @@ static void link_task(void *arg)
                 g = (game_t){.bx = (W - BALL) / 2, .by = (H - BALL) / 2, .py = {(H - PADH) / 2, (H - PADH) / 2}};
                 sdx = esp_random() & 1 ? BALL_V : -BALL_V;
                 serve_at = now + PAUSE_MS;
+                trail_n = 0;
                 taskEXIT_CRITICAL(&gmux);
                 xTaskNotifyGive(game_task);
             }
@@ -272,7 +285,7 @@ void app_pong(void)
     radio_start();
     xTaskCreate(link_task, "link", 4096, NULL, 6, NULL);
     for (;;) { // unpaired: an empty court, then wait for the link task to pair
-        draw(&(game_t){.py = {(H - PADH) / 2, (H - PADH) / 2}}, false, false);
+        draw(&(game_t){.py = {(H - PADH) / 2, (H - PADH) / 2}}, NULL, 0, false, false);
         ui_frame(3);
         ui_close();
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
