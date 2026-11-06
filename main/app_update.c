@@ -2,7 +2,7 @@
 // its own firmware (bootloader, partition table, running app) onto it, then resets it. Core from idf_port clone.c.
 // Both badges must run on their batteries: the USB-C port is sink-only and cannot power the other badge.
 // A target on our firmware drops into its ROM loader by itself; one on the stock MicroPython needs BOOT held while
-// RESET is tapped.
+// RESET is tapped. After a good update this badge restarts.
 #include <stdio.h>
 #include <string.h>
 #include <sys/param.h>
@@ -13,6 +13,7 @@
 #include "esp_loader.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "esp32_usb_cdc_acm_port.h"
 #include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
@@ -70,8 +71,10 @@ static void update_task(void *arg)
     ok = ok && copy(&ld, 0x0, 0x8000, &done, total) && // bootloader
          copy(&ld, 0x8000, 0x1000, &done, total) &&    // partition table
          copy(&ld, app->address, img.image_len, &done, total); // app
+    // On success the target resets and drops off USB; the port's disconnect handler (USB host task) closes the
+    // device then, and a deinit here would race it. So no deinit: the app restarts after "Done".
     if (ok) esp_loader_reset_target(&ld);
-    esp_loader_deinit(&ld);
+    else esp_loader_deinit(&ld);
     ESP_LOGI("update", "%s, %u bytes", ok ? "done" : "failed", (unsigned)done);
     pct = ok ? 101 : -2;
     vTaskDelete(NULL);
@@ -135,8 +138,8 @@ void app_update(void)
         ui_close();
         if (pct == 101) {
             message("Done");
-            ms(2000);
-            return;
+            ms(3000);
+            esp_restart(); // boots to the home screen, USB back to USB-Serial-JTAG
         }
         message("Update failed"); // then keep scanning: unplug, fix, plug again
         ms(3000);
