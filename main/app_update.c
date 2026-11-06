@@ -93,13 +93,10 @@ static void message(const char *s)
 
 void app_update(void)
 {
-    static bool host; // usb_host_install takes the PHY from USB-Serial-JTAG until reboot: do it once
-    if (!host) {
-        usb_host_install(&(usb_host_config_t){.intr_flags = ESP_INTR_FLAG_LEVEL1});
-        xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, 20, NULL);
-        cdc_acm_host_install(NULL);
-        host = true;
-    }
+    // usb_host_install takes the PHY from USB-Serial-JTAG until reboot, so this app never returns: it restarts.
+    usb_host_install(&(usb_host_config_t){.intr_flags = ESP_INTR_FLAG_LEVEL1});
+    xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, 20, NULL);
+    cdc_acm_host_install(NULL);
     for (;;) {
         pct = -1;
         stop = false;
@@ -116,7 +113,7 @@ void app_update(void)
         ui_close();
         while (pct == -1)
             if (btn_get(200) >= 0) stop = true;
-        if (pct == -3) return;
+        if (pct == -3) esp_restart(); // home, with the badge back on the Mac
 
         // Copying: redraw whenever the number moved; each frame takes ~1.07 s while the copy task keeps going.
         for (int shown = -1, pulls = 3; pct >= 0 && pct <= 100;) {
