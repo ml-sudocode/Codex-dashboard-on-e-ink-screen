@@ -11,13 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Version and Wi-Fi from the tag and repo secrets
-        env:
-          WIFI_SSID: ${{ secrets.WIFI_SSID }}
-          WIFI_PASS: ${{ secrets.WIFI_PASS }}
+      - name: Version from the tag, the badge Wi-Fi (public at Supercon, so plain here)
         run: |
           echo "${GITHUB_REF_NAME#v}" > version.txt
-          printf '#define WIFI_SSID "%s"\n#define WIFI_PASS "%s"\n' "$WIFI_SSID" "$WIFI_PASS" > main/wifi_secret.h
+          printf '#define WIFI_SSID "Supercon"\n#define WIFI_PASS "tink1930"\n' > main/wifi_secret.h
       - uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v6.0.2
