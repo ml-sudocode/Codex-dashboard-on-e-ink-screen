@@ -125,11 +125,13 @@ static void wired(void)
             char s[8];
             snprintf(s, sizeof s, "%d%%", p);
             memset(fb, 0, sizeof fb);
-            text(48, 48, 6, "Wired update", true);
-            text(96, 220, 4, "Updating connected badge", true);
-            outline(96, 300, 768, 96, 6);
-            box(108, 312, 744 * p / 100, 72, true);
-            text(96, 430, 4, s, true);
+            // ui_frame refreshes only the changed rows, top-down: the bar and the number sit at the top, alone in
+            // their rows, so a step costs ~1/5 of a full frame. The static text below is never redrawn.
+            outline(48, 48, 720, 96, 6);
+            box(60, 60, 696 * p / 100, 72, true);
+            text(800, 80, 4, s, true);
+            text(48, 300, 4, "Updating connected badge", true);
+            text(48, 560, 3, "Wired update", true);
             ui_frame(pulls);
             pulls = 1;
             shown = p;
