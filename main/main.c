@@ -1,0 +1,491 @@
+// badge os: boots to the home screen, the only way back to it is a reboot (or an app that returns).
+// Panel driver, drawing, buttons and the home screen live here; the apps are app_*.c behind badge.h.
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/param.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_app_desc.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "nvs_flash.h"
+#include "badge.h"
+
+static const char *TAG = "os";
+
+// ---- Panel: Pervasive Displays 9.7" black/white/red, 960x672, two CoGs.
+// The left CoG (master) drives columns 0-479, the right CoG (slave) columns 480-959.
+#define IMG (2 * PLANE)   // an image is the black plane, then the red plane
+#define HALF (PLANE / 2)  // what one CoG gets of one plane
+#define REVERSE_BITS 1    // stock driver: reverse unless /data/hwconf display_pn == "84"
+
+enum { CS_L = 13, CS_R = 3, BUSY_L = 12, BUSY_R = 8, DC = 10, RST = 11, SCK = 21, MOSI = 47 };
+enum { LEFT = 1, RIGHT = 2, BOTH = 3 };
+
+static spi_device_handle_t spi;
+
+void ms(int t) { vTaskDelay(pdMS_TO_TICKS(t) + 1); } // at least t ms (1 kHz tick)
+
+// One S3 SPI transaction carries at most 32 KB, so long data goes out in 4 KB pieces (CS stays low).
+static void tx(const uint8_t *d, size_t n)
+{
+    for (size_t k; n; d += k, n -= k) {
+        k = MIN(n, 4096);
+        spi_transaction_t t = {.length = 8 * k, .tx_buffer = d};
+        ESP_ERROR_CHECK(spi_device_polling_transmit(spi, &t));
+    }
+}
+
+// Index byte with DC low, then data with DC high, to the CoGs in `cog`.
+static void cmd(int cog, uint8_t index, const uint8_t *data, size_t n)
+{
+    gpio_set_level(DC, 0);
+    if (cog & LEFT) gpio_set_level(CS_L, 0);
+    if (cog & RIGHT) gpio_set_level(CS_R, 0);
+    tx(&index, 1);
+    gpio_set_level(CS_L, 1);
+    gpio_set_level(CS_R, 1);
+    gpio_set_level(DC, 1);
+    if (cog & LEFT) gpio_set_level(CS_L, 0);
+    if (cog & RIGHT) gpio_set_level(CS_R, 0);
+    tx(data, n);
+    gpio_set_level(CS_L, 1);
+    gpio_set_level(CS_R, 1);
+}
+#define CMD(cog, index, ...) \
+    cmd(cog, index, (const uint8_t[]){__VA_ARGS__}, sizeof((const uint8_t[]){__VA_ARGS__}))
+
+// Each CoG pulls its BUSY low while it works. Logs how long each side stayed busy (-1: timeout).
+// Returns false on timeout.
+static bool wait_ready(const char *what, int timeout_ms)
+{
+    int64_t t0 = esp_timer_get_time(), t = 0;
+    int l = -1, r = -1;
+    while ((l < 0 || r < 0) && t < timeout_ms * 1000LL) {
+        t = esp_timer_get_time() - t0;
+        if (l < 0 && gpio_get_level(BUSY_L)) l = t / 1000;
+        if (r < 0 && gpio_get_level(BUSY_R)) r = t / 1000;
+        if (l < 0 || r < 0) ms(10);
+    }
+    ESP_LOGI(TAG, "%s: BUSY left %d ms, right %d ms", what, l, r);
+    return l >= 0 && r >= 0;
+}
+
+static uint8_t rev(uint8_t b)
+{
+    b = b >> 4 | b << 4;
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+    return (b & 0xAA) >> 1 | (b & 0x55) << 1;
+}
+
+// A CoG takes its 60 bytes of every row of one plane in one burst. plane NULL = all white.
+static void send_half(int cog, uint8_t index, const uint8_t *plane)
+{
+    static DMA_ATTR uint8_t buf[HALF];
+    const uint8_t *src = plane ? plane + (cog == RIGHT ? W / 16 : 0) : NULL;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W / 16; x++) {
+            uint8_t b = src ? src[y * (W / 8) + x] : 0;
+            buf[y * (W / 16) + x] = REVERSE_BITS ? rev(b) : b;
+        }
+    CMD(cog, 0x12, 0x3B, 0x00, 0x14); // RAM_RW
+    cmd(cog, index, buf, HALF);
+}
+
+// A panel session: epd_open (reset, frame data, register sequence, DC-DC up), any number of
+// epd_pull, epd_close. Same sequence as PDi EPD_Driver_GU_large and the stock epd.py, plus what the
+// badge team documented for this B1 CoG (2026-Billboard_Badge/documentation/itc97-driver-reference.pdf):
+// the 0x70 booster setting and the 0xB0 short waveform.
+
+// Short waveform for the B1 CoG: data/rendered_luts.py "lutb_base" from the badge team.
+// 5 tables (paper, ink, red, unused, VCOM) x 10 groups of {level, on, off, ph2, on, off, ph2, repeat};
+// a level byte is 2 bits per phase: 0 GND, 1 VDH, 2 VDL, 3 VDHR. A pull runs a fixed ~1070 ms
+// whatever the table asks for, so one pull is a light dose and three make a clean image.
+static const uint8_t lutb[400] = {
+    // table 0: paper
+    0x99, 0x0A, 0x0A, 0x01, 0x0A, 0x0A, 0x01, 0x03,
+    0xAA, 0x2D, 0x03, 0x01, 0x2D, 0x03, 0x01, 0x03,
+    0xAA, 0x2D, 0x03, 0x01, 0x2D, 0x03, 0x01, 0x03,
+    0xAA, 0x2D, 0x03, 0x01, 0x2D, 0x03, 0x01, 0x03,
+    0xAA, 0x2D, 0x03, 0x01, 0x2D, 0x03, 0x01, 0x03,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    // table 1: ink
+    0x66, 0x0A, 0x0A, 0x01, 0x0A, 0x0A, 0x01, 0x03,
+    0x44, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x44, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x44, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x44, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    // table 2: red
+    0xEE, 0x0A, 0x0A, 0x01, 0x0A, 0x0A, 0x01, 0x03,
+    0xAA, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0xFF, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    // table 3: unused
+    0x00, 0x0A, 0x0A, 0x01, 0x0A, 0x0A, 0x01, 0x03,
+    0x00, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x00, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x00, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x00, 0x2D, 0x01, 0x01, 0x2D, 0x01, 0x01, 0x03,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    // table 4: VCOM
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+};
+
+// quick: PDi Wide_Large's waits for this CoG family. Proven on the fast path only (panel_lab experiment 02:
+// session open 348 ms instead of 2443 ms, 0xB0 still latches); the slow OTP refresh keeps the GU_large waits.
+static void epd_reset(bool quick)
+{
+    if (!quick) ms(200);
+    gpio_set_level(RST, 1);
+    ms(quick ? 2 : 20);
+    gpio_set_level(RST, 0);
+    ms(quick ? 4 : 200);
+    gpio_set_level(RST, 1);
+    ms(quick ? 20 : 200);
+    gpio_set_level(CS_L, 1);
+    gpio_set_level(CS_R, 1);
+    ms(5);
+    CMD(BOTH, 0x70, 0x71, 0x36); // B1 booster setting. Without it a refresh draws ~2 A (badge team errata 9)
+}
+
+// Frame into CoG RAM. red NULL = no red; with_red false leaves the red RAM as it is (saves 80 ms).
+static void epd_load(const uint8_t *black, const uint8_t *red, bool with_red)
+{
+    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW: 60 bytes x 672 lines
+    CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);             // DRFW: whole panel
+    for (int cog = LEFT; cog <= RIGHT; cog++) {
+        send_half(cog, 0x10, black);
+        if (with_red) send_half(cog, 0x11, red);
+    }
+}
+
+static void dcdc_on(void)
+{
+    CMD(BOTH, 0x51, 0x50, 0x01); // DC-DC soft start
+    for (int v = 1; v <= 4; v++) {
+        CMD(BOTH, 0x09, 0x1F);
+        CMD(BOTH, 0x51, 0x50, v);
+        CMD(BOTH, 0x09, 0x9F);
+        ms(2);
+    }
+    for (int v = 1; v <= 10; v++) {
+        CMD(BOTH, 0x09, 0x1F);
+        CMD(BOTH, 0x51, 0x0A, v);
+        CMD(BOTH, 0x09, 0x9F);
+        ms(2);
+    }
+    for (int v = 3; v <= 10; v++) {
+        CMD(BOTH, 0x09, 0x7F);
+        CMD(BOTH, 0x51, 0x0A, v);
+        CMD(BOTH, 0x09, 0xFF);
+        ms(2);
+    }
+    for (int v = 9; v >= 2; v--) {
+        CMD(BOTH, 0x09, 0x7F);
+        CMD(BOTH, 0x51, v, 0x0A);
+        CMD(BOTH, 0x09, 0xFF);
+        ms(2);
+    }
+    CMD(BOTH, 0x09, 0xFF);
+    ms(100);
+    wait_ready("dc-dc on", 10000); // never trigger into a booster that is still ramping
+}
+
+// fast: load the short waveform instead of the panel's own 33 s one (black/white only, red goes pale).
+static void epd_open(const uint8_t *black, const uint8_t *red, bool fast)
+{
+    int hi = fast ? 2 : 100, lo = fast ? 10 : 100; // load strobe waits
+    epd_reset(fast);
+    epd_load(black, red, true);
+    CMD(BOTH, 0x05, 0x7D);
+    ms(fast ? 50 : 200);
+    CMD(BOTH, 0x05, 0x00);
+    ms(fast ? 1 : 10);
+    CMD(BOTH, 0xD8, 0x80); // MS_SYNC
+    CMD(BOTH, 0xD6, 0x00); // BVSS
+    CMD(BOTH, 0xA7, 0x10);
+    ms(hi);
+    CMD(BOTH, 0xA7, 0x00);
+    ms(lo);
+    CMD(BOTH, 0x03, 0x00, 0x11); // OSC
+    for (int cog = LEFT; cog <= RIGHT; cog++) {
+        CMD(cog, 0x44, 0x00);
+        CMD(cog, 0x45, 0x80);
+        CMD(cog, 0xA7, 0x10);
+        ms(hi);
+        CMD(cog, 0xA7, 0x00);
+        ms(lo);
+        CMD(cog, 0x44, 0x06);
+        CMD(cog, 0x45, fast ? 0x84 : 0x82); // temperature 0x50 + 2 * C: 26 C as the badge team uses, 25 C stock
+        CMD(cog, 0xA7, 0x10);
+        ms(hi);
+        CMD(cog, 0xA7, 0x00);
+        ms(lo); // this strobe commits the OTP waveform; 0xB0 latches 10 ms after it (experiment 02)
+    }
+    CMD(BOTH, 0x60, 0x25); // TCON
+    CMD(LEFT, 0x61, 0x01); // STV_DIR, master only
+    CMD(BOTH, 0x02, 0x00); // VCOM
+    if (fast) cmd(BOTH, 0xB0, lutb, sizeof lutb); // one chance per session: rewriting it re-latches the slow one
+    dcdc_on();
+}
+
+// Run the latched waveform n times on what is in RAM. Returns ms spent.
+static int epd_pull(int n, int timeout_ms)
+{
+    int64_t t0 = esp_timer_get_time();
+    while (n--) {
+        CMD(BOTH, 0x15, 0x3C);
+        ms(5);
+        wait_ready("pull", timeout_ms);
+    }
+    return (esp_timer_get_time() - t0) / 1000;
+}
+
+static void epd_close(void)
+{
+    CMD(BOTH, 0x09, 0x7F); // DC-DC soft shutdown
+    CMD(BOTH, 0x05, 0x7D);
+    CMD(BOTH, 0x09, 0x00);
+    ms(200);
+    wait_ready("dc-dc off", 2000);
+    gpio_set_level(DC, 0);
+    gpio_set_level(CS_L, 0);
+    gpio_set_level(RST, 0);
+    gpio_set_level(CS_L, 1);
+}
+
+static void epd_init(void)
+{
+    gpio_set_level(DC, 1);
+    gpio_set_level(RST, 1);
+    gpio_set_level(CS_L, 1);
+    gpio_set_level(CS_R, 1);
+    gpio_config(&(gpio_config_t){.pin_bit_mask = BIT64(DC) | BIT64(RST) | BIT64(CS_L) | BIT64(CS_R),
+                                 .mode = GPIO_MODE_OUTPUT});
+    gpio_config(&(gpio_config_t){.pin_bit_mask = BIT64(BUSY_L) | BIT64(BUSY_R), .mode = GPIO_MODE_INPUT});
+    spi_bus_config_t bus = {.mosi_io_num = MOSI, .sclk_io_num = SCK, .miso_io_num = -1,
+                            .quadwp_io_num = -1, .quadhd_io_num = -1, .max_transfer_sz = 4096};
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO));
+    spi_device_interface_config_t dev = {.clock_speed_hz = 8000000, .mode = 0, .spics_io_num = -1, .queue_size = 1};
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev, &spi));
+}
+
+
+// ---- Drawing into fb
+uint8_t fb[PLANE];
+
+void box(int x, int y, int w, int h, bool ink)
+{
+    for (int r = MAX(y, 0); r < MIN(y + h, H); r++)
+        for (int c = MAX(x, 0); c < MIN(x + w, W); c++)
+            if (ink) fb[r * (W / 8) + c / 8] |= 0x80 >> (c & 7);
+            else fb[r * (W / 8) + c / 8] &= ~(0x80 >> (c & 7));
+}
+
+void outline(int x, int y, int w, int h, int t)
+{
+    box(x, y, w, t, true), box(x, y + h - t, w, t, true), box(x, y, t, h, true), box(x + w - t, y, t, h, true);
+}
+
+#include "font8x8_basic.h" // public domain IBM VGA 8x8 font: one byte per row, bit 0 = leftmost pixel
+
+void text(int x, int y, int scale, const char *s, bool ink)
+{
+    for (; *s; s++, x += 8 * scale)
+        for (int r = 0; r < 8; r++)
+            for (int c = 0; c < 8; c++)
+                if (font8x8_basic[*s & 0x7F][r] >> c & 1) box(x + c * scale, y + r * scale, scale, scale, ink);
+}
+
+// ---- Panel frames: one short-waveform session shared by consecutive frames, a fresh one every 20 (badge team).
+static int ui_n = -1; // frames shown in the open session, -1 = none open
+
+void ui_frame(int pulls)
+{
+    if (ui_n < 0 || ui_n == 20) {
+        if (ui_n == 20) epd_close();
+        epd_open(fb, NULL, true);
+        ui_n = 0;
+    } else {
+        epd_load(fb, NULL, false);
+    }
+    epd_pull(pulls, 5000);
+    ui_n++;
+}
+
+void ui_close(void)
+{
+    if (ui_n >= 0) epd_close();
+    ui_n = -1;
+}
+
+// ---- Buttons, active low with pull-ups, polled every 20 ms; each new press goes into a queue.
+static QueueHandle_t btnq;
+
+static void buttons(void *arg)
+{
+    static const int pin[4] = {40, 15, 39, 16}; // BTN_PLUS, BTN_MINUS, BTN_A, BTN_B (GPIOs of the printed names)
+    gpio_config(&(gpio_config_t){.pin_bit_mask = BIT64(40) | BIT64(15) | BIT64(39) | BIT64(16), .mode = GPIO_MODE_INPUT,
+                                 .pull_up_en = GPIO_PULLUP_ENABLE});
+    for (int was = 0;; ms(20)) {
+        int now = 0;
+        for (int k = 0; k < 4; k++) now |= (!gpio_get_level(pin[k])) << k;
+        for (int k = 0; k < 4; k++)
+            if (now & ~was & 1 << k) xQueueSend(btnq, &k, 0);
+        was = now;
+    }
+}
+
+int btn_get(int timeout_ms)
+{
+    int k;
+    return xQueueReceive(btnq, &k, timeout_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms)) ? k : -1;
+}
+
+void btn_flush(void) { xQueueReset(btnq); }
+
+// ---- Home screen: iOS-style grid of icons. MENU + / MENU - move left / right, A or B opens the app.
+#define ICON 176 // icon square, px
+#define PITCH 224 // icon to icon
+#define X0 56     // (960 - 4 * 176 - 3 * 48) / 2: four icons per row
+#define Y0 72
+#define ROW 300
+
+static void icon_base(int x, int y) // black square with rounded corners
+{
+    enum { R = 28 };
+    box(x, y, ICON, ICON, true);
+    for (int r = 0; r < R; r++)
+        for (int c = 0; c < R; c++)
+            if ((R - c) * (R - c) + (R - r) * (R - r) > R * R)
+                box(x + c, y + r, 1, 1, false), box(x + ICON - 1 - c, y + r, 1, 1, false),
+                    box(x + c, y + ICON - 1 - r, 1, 1, false), box(x + ICON - 1 - c, y + ICON - 1 - r, 1, 1, false);
+}
+
+static void icon_update(int x, int y) // download arrow into a tray
+{
+    icon_base(x, y);
+    box(x + 78, y + 32, 20, 60, false);
+    for (int i = 0; i < 36; i++) box(x + 88 - (36 - i), y + 92 + i, 2 * (36 - i), 1, false);
+    box(x + 36, y + 136, 104, 14, false);
+}
+
+static void icon_pong(int x, int y) // two paddles and a ball
+{
+    icon_base(x, y);
+    box(x + 28, y + 40, 16, 64, false);
+    box(x + 132, y + 76, 16, 64, false);
+    box(x + 80, y + 68, 20, 20, false);
+    for (int k = 0; k < 6; k++) box(x + 86, y + 18 + k * 26, 6, 12, false);
+}
+
+typedef struct {
+    const char *name;
+    void (*icon)(int x, int y);
+    void (*run)(void);
+} app_t;
+
+static const app_t apps[] = {
+    {"Update", icon_update, app_update},
+    {"Pong", icon_pong, app_pong},
+};
+#define NAPPS ((int)(sizeof apps / sizeof *apps))
+
+static void draw_home(int sel)
+{
+    char ver[48];
+    snprintf(ver, sizeof ver, "badge os v%s", esp_app_get_description()->version);
+    memset(fb, 0, sizeof fb);
+    for (int i = 0; i < NAPPS; i++) {
+        int x = X0 + i % 4 * PITCH, y = Y0 + i / 4 * ROW;
+        apps[i].icon(x, y);
+        text(x + ICON / 2 - (int)strlen(apps[i].name) * 12, y + ICON + 24, 3, apps[i].name, true);
+        if (i == sel) outline(x - 16, y - 16, ICON + 32, ICON + 32, 8);
+    }
+    text(W - (int)strlen(ver) * 24 - 24, H - 48, 3, ver, true);
+}
+
+static void home(void)
+{
+    btn_flush();
+    for (int sel = 0, pulls = 3;;) {
+        draw_home(sel);
+        ui_frame(pulls);
+        pulls = 1;
+        int b = btn_get(10000);
+        if (b < 0) { // the screen sits still: end the panel session, then wait as long as it takes
+            ui_close();
+            b = btn_get(-1);
+        }
+        if (b == BTN_PLUS) sel = (sel + NAPPS - 1) % NAPPS; // MENU + is the left one: move left
+        else if (b == BTN_MINUS) sel = (sel + 1) % NAPPS; // MENU - is the right one: move right
+        else {
+            ESP_LOGI(TAG, "opening %s", apps[sel].name);
+            btn_flush();
+            apps[sel].run();
+            ui_close(); // the app came back: home again, drawn clean
+            btn_flush();
+            pulls = 3;
+        }
+    }
+}
+
+void app_main(void)
+{
+    esp_err_t err = nvs_flash_init(); // Wi-Fi (ESP-NOW) keeps its calibration here
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+    epd_init();
+    btnq = xQueueCreate(8, sizeof(int));
+    xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
+
+    // First boot of badge os on this badge: one slow 3-colour refresh to white, because the fast waveform
+    // cannot take red (an old nametag) off the film. ~35 s, once.
+    nvs_handle_t nvs;
+    uint8_t clean = 0;
+    ESP_ERROR_CHECK(nvs_open("os", NVS_READWRITE, &nvs));
+    nvs_get_u8(nvs, "clean", &clean);
+    if (!clean) {
+        epd_open(NULL, NULL, false);
+        epd_pull(1, 120000);
+        epd_close();
+        nvs_set_u8(nvs, "clean", 1);
+        nvs_commit(nvs);
+    }
+    home();
+}
