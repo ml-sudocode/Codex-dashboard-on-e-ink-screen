@@ -26,7 +26,10 @@ int btn_get(int timeout_ms); // next press, -1 on timeout; timeout -1 waits fore
 void btn_flush(void);
 int btn_held(void); // buttons held right now: bit (1 << BTN_x) set while pressed, updated every 20 ms
 
-bool wifi_connect(int timeout_ms); // join the badge Wi-Fi (main/wifi_secret.h); true once there is an IP
+// Wi-Fi is off unless an app turns it on; the home screen turns it off again when an app returns.
+void wifi_on(void);                 // radio on, station mode, no network joined (ESP-NOW apps: set the channel next)
+bool wifi_connect(int timeout_ms); // wifi_on + join the badge Wi-Fi (main/wifi_secret.h); true once there is an IP
+void wifi_off(void);                // radio off
 int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: fails while Wi-Fi is busy)
 
 // Apps: run() takes over the badge. Returning goes back to the home screen; most apps never return.

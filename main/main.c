@@ -396,7 +396,7 @@ void btn_flush(void) { xQueueReset(btnq); }
 
 int btn_held(void) { return held; }
 
-// ---- Wi-Fi, on demand: Pong's ESP-NOW wants a fixed channel, an access point would pick its own.
+// ---- Wi-Fi: off unless an app turns it on (no radio overhead at home); off again when the app returns.
 #if __has_include("wifi_secret.h")
 #include "wifi_secret.h" // WIFI_SSID / WIFI_PASS, gitignored; the release workflow writes it from repo secrets
 #else
@@ -404,36 +404,51 @@ int btn_held(void) { return held; }
 #define WIFI_PASS ""
 #endif
 static EventGroupHandle_t wifi_ev; // bit 0: got an IP
+static volatile bool wifi_join;    // keep (re)joining the badge Wi-Fi
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (base == WIFI_EVENT) { // dropped (or never got in): keep trying
-        xEventGroupClearBits(wifi_ev, 1);
+    if (base == IP_EVENT) xEventGroupSetBits(wifi_ev, 1);
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) xEventGroupClearBits(wifi_ev, 1);
+    if (base == WIFI_EVENT && (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED) && wifi_join)
         esp_wifi_connect();
-    } else {
-        xEventGroupSetBits(wifi_ev, 1);
-    }
 }
 
-bool wifi_connect(int timeout_ms)
+void wifi_on(void)
 {
-    if (!*WIFI_SSID) return false;
-    if (!wifi_ev) {
+    if (!wifi_ev) { // the driver is set up once and kept; on/off only starts and stops the radio
         wifi_ev = xEventGroupCreate();
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
         esp_netif_create_default_wifi_sta();
         wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
         ESP_ERROR_CHECK(esp_wifi_init(&init));
-        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_wifi, NULL);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL);
-        wifi_config_t c = {.sta = {.ssid = WIFI_SSID, .password = WIFI_PASS}};
+        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &c));
-        ESP_ERROR_CHECK(esp_wifi_start());
-        esp_wifi_connect();
+        esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL);
     }
+    esp_wifi_start(); // already running: harmless error
+}
+
+bool wifi_connect(int timeout_ms)
+{
+    if (!*WIFI_SSID) return false;
+    wifi_on();
+    wifi_config_t c = {.sta = {.ssid = WIFI_SSID, .password = WIFI_PASS}};
+    esp_wifi_set_config(WIFI_IF_STA, &c);
+    wifi_join = true;
+    esp_wifi_connect(); // not started yet: harmless error, the STA_START event connects
     return xEventGroupWaitBits(wifi_ev, 1, false, true, pdMS_TO_TICKS(timeout_ms)) & 1;
+}
+
+void wifi_off(void)
+{
+    if (!wifi_ev) return;
+    wifi_join = false;
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+    xEventGroupClearBits(wifi_ev, 1);
 }
 
 // ---- Battery: GPIO14 (BAT_SENS) reads half of the LDO input through a 10k/10k divider. On battery that is the
@@ -573,6 +588,7 @@ static void home(void)
             ui_close();
             btn_flush();
             apps[sel].run();
+            wifi_off(); // whatever the app turned on is off again at home
             ui_wipe(); // and the app through the home screen
             btn_flush();
             pulls = 3;
