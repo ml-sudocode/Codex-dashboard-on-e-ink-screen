@@ -17,6 +17,7 @@
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_wifi.h"
+#include "usb/usb_host.h"
 #include "freertos/event_groups.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -588,6 +589,8 @@ static void home(void)
             ui_close();
             btn_flush();
             apps[sel].run();
+            usb_host_lib_info_t usb;
+            if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
             wifi_off(); // whatever the app turned on is off again at home
             ui_wipe(); // and the app through the home screen
             btn_flush();

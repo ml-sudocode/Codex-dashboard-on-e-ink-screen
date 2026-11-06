@@ -22,6 +22,8 @@
 ## The app contract (`main/badge.h`)
 - `void app_<name>(void)` runs on the home screen's task. It takes over the badge; returning goes back to the
   home screen (most apps never return; a reboot is the other way home).
+- On the home screen the badge must always be flashable over USB: an app that installs the USB host and returns
+  gets the badge restarted by the OS (better: restart it yourself when you are done).
 - The OS has closed its panel session when your app starts. Draw into `fb` (960x672, 1 bit, 1 = black) with
   `box`, `outline`, `text`, then `ui_frame(pulls)`. Use 3 pulls for a clean first picture, 1 afterwards.
   `ui_close()` when the screen will sit still.
