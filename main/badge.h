@@ -36,5 +36,5 @@ int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: f
 // Apps: run() takes over the badge. Returning goes back to the home screen; most apps never return.
 void app_update(void);
 void app_pong(void);
-void app_ota(void);
+void app_ota(void);   // not on the home screen: the Update app offers it next to the wired update
 void app_snake(void);

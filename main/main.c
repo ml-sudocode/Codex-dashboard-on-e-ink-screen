@@ -597,16 +597,6 @@ static void icon_pong(int x, int y) // two paddles and a ball
     for (int k = 0; k < 6; k++) box(x + 86, y + 18 + k * 26, 6, 12, false);
 }
 
-static void icon_ota(int x, int y) // a cloud with an arrow coming down out of it
-{
-    icon_base(x, y);
-    box(x + 40, y + 60, 96, 36, false);
-    box(x + 56, y + 40, 40, 30, false);
-    box(x + 84, y + 48, 32, 20, false);
-    box(x + 80, y + 96, 16, 30, false); // the arrow's shaft
-    for (int i = 0; i < 24; i++) box(x + 88 - (24 - i), y + 124 + i, 2 * (24 - i), 1, false);
-}
-
 static void icon_snake(int x, int y) // a snake of white squares heading for a dot
 {
     icon_base(x, y);
@@ -624,7 +614,6 @@ typedef struct {
 static const app_t apps[] = {
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
-    {"Online", icon_ota, app_ota},
     {"Snake", icon_snake, app_snake},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
