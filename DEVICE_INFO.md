@@ -131,6 +131,8 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - The slide switch only enables the 3.3 V LDO (AP2112K, 600 mA); the battery still charges with the switch off.
 - GPIO14 (BAT_SENS) reads half of the LDO input: the battery voltage on battery, about VBUS - 0.3 V on USB.
   It is on ADC2, which shares hardware with Wi-Fi: expect failed reads while the radio is busy.
+  badge os turns it into a percentage with a typical LiPo rest-voltage curve (3.3 V = 0 %, 4.2 V = 100 %),
+  and shows "USB" above 4.4 V (`battery_pct()` in main.c).
 
 ## USB
 - USB-C wired to the ESP32-S3's native USB (no hub, no switch). Our firmware's console and esptool use the

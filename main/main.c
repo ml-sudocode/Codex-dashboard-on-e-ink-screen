@@ -9,6 +9,8 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -353,6 +355,7 @@ void ui_close(void)
 
 // ---- Buttons, active low with pull-ups, polled every 20 ms; each new press goes into a queue.
 static QueueHandle_t btnq;
+static volatile int held;
 
 static void buttons(void *arg)
 {
@@ -364,7 +367,7 @@ static void buttons(void *arg)
         for (int k = 0; k < 4; k++) now |= (!gpio_get_level(pin[k])) << k;
         for (int k = 0; k < 4; k++)
             if (now & ~was & 1 << k) xQueueSend(btnq, &k, 0);
-        was = now;
+        held = was = now;
     }
 }
 
@@ -375,6 +378,51 @@ int btn_get(int timeout_ms)
 }
 
 void btn_flush(void) { xQueueReset(btnq); }
+
+int btn_held(void) { return held; }
+
+// ---- Battery: GPIO14 (BAT_SENS) reads half of the LDO input through a 10k/10k divider. On battery that is the
+// LiPo voltage; on USB the battery is cut off from it (power path) and it reads about VBUS - 0.3 V.
+int battery_pct(void)
+{
+    static adc_oneshot_unit_handle_t adc;
+    static adc_cali_handle_t cali;
+    static adc_channel_t ch;
+    if (!adc) {
+        adc_unit_t unit;
+        adc_oneshot_io_to_channel(14, &unit, &ch);
+        adc_oneshot_new_unit(&(adc_oneshot_unit_init_cfg_t){.unit_id = unit}, &adc);
+        adc_oneshot_config_channel(adc, ch, &(adc_oneshot_chan_cfg_t){.atten = ADC_ATTEN_DB_12});
+        adc_cali_create_scheme_curve_fitting(&(adc_cali_curve_fitting_config_t){.unit_id = unit, .chan = ch,
+                                                                                .atten = ADC_ATTEN_DB_12}, &cali);
+    }
+    int mv, sum = 0;
+    for (int k = 0; k < 8; k++) {
+        if (!cali || adc_oneshot_get_calibrated_result(adc, cali, ch, &mv) != ESP_OK) return -2;
+        sum += mv;
+    }
+    int vin = sum / 8 * 2;
+    if (vin > 4400) return -1;
+    // ponytail: a typical LiPo rest-voltage curve, not this badge's cell; good to ~10 %
+    static const int v[] = {3300, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200};
+    static const int p[] = {0, 3, 10, 25, 45, 62, 77, 90, 100};
+    if (vin <= v[0]) return 0;
+    for (int i = 1; i < 9; i++)
+        if (vin < v[i]) return p[i - 1] + (p[i] - p[i - 1]) * (vin - v[i - 1]) / (v[i] - v[i - 1]);
+    return 100;
+}
+
+static void draw_battery(int x, int y) // a battery outline, filled to the charge, then "87%" or "USB"
+{
+    int pct = battery_pct();
+    if (pct == -2) return;
+    char s[16] = "USB";
+    if (pct >= 0) snprintf(s, sizeof s, "%d%%", pct);
+    outline(x, y, 48, 24, 3);
+    box(x + 48, y + 7, 4, 10, true);
+    box(x + 5, y + 5, pct < 0 ? 38 : 38 * pct / 100, 14, true);
+    text(x + 64, y, 3, s, true);
+}
 
 // ---- Home screen: iOS-style grid of icons. MENU + / MENU - move left / right, A or B opens the app.
 #define ICON 176 // icon square, px
@@ -435,6 +483,7 @@ static void draw_home(int sel)
         if (i == sel) outline(x - 16, y - 16, ICON + 32, ICON + 32, 8);
     }
     text(W - (int)strlen(ver) * 24 - 24, H - 48, 3, ver, true);
+    draw_battery(W - 24 - 64 - 4 * 24, 24);
 }
 
 static void home(void)
