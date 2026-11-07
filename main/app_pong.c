@@ -93,9 +93,10 @@ static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, ui
     int p = g->dx > 0, face = p ? W - PADX - PADW - BALL : PADX + PADW; // ball x where it touches paddle p
     bool crossed = p ? g->bx >= face && g->bx - g->dx < face : g->bx <= face && g->bx - g->dx > face;
     int off = g->by + BALL / 2 - (g->py[p] + PADH / 2); // ball centre from paddle centre
-    if (crossed && abs(off) < (PADH + BALL) / 2) { // paddle: back, steeper the further from its centre
+    if (crossed && abs(off) < (PADH + BALL) / 2) { // paddle: back, steeper the further from its centre, +-1 at random
         g->bx = 2 * face - g->bx, g->dx = -g->dx;
-        g->dy = off * BALL_DY / ((PADH + BALL) / 2) ?: (off < 0 ? -1 : 1); // never flat: no endless rally
+        int dy = off * BALL_DY / ((PADH + BALL) / 2) + (int)(rnd >> 8 & 3) % 3 - 1; // plus a random nudge
+        g->dy = MIN(MAX(dy, -BALL_DY), BALL_DY) ?: (rnd >> 10 & 1 ? 1 : -1); // never flat: no endless rally
     } else if (g->bx < -BALL || g->bx > W) { // missed: a point, then serve towards whoever lost it
         g->score[!p]++;
         *sdx = p ? BALL_V : -BALL_V;
