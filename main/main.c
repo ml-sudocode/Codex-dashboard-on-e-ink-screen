@@ -635,6 +635,7 @@ bool wifi_connect(int timeout_ms)
     wifi_config_t c = {.sta = {.ssid = WIFI_SSID, .password = WIFI_PASS}};
     esp_wifi_set_config(WIFI_IF_STA, &c);
     wifi_join = true;
+    esp_wifi_set_ps(WIFI_PS_NONE); // modem sleep slows downloads a lot (Online update); the radio is busy anyway
     esp_wifi_connect(); // not started yet: harmless error, the STA_START event connects
     return xEventGroupWaitBits(wifi_ev, 1, false, true, pdMS_TO_TICKS(timeout_ms)) & 1;
 }
