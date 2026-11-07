@@ -1,5 +1,5 @@
 // Aliens ("Saucer Siege"): a 8 x 5 formation of three kinds of aliens marches side to side, steps down at the edges
-// and speeds up as it thins out. Hold A / B to move the gun left / right, MENU + or MENU - to fire (one shot in the air
+// and speeds up as it thins out. Hold A / B to move the gun left / right, MENU + or MENU - to fire (both held go home: the OS) (one shot in the air
 // at a time; holding fires again as soon as it lands). The AS5600 knob add-on moves the gun too: a full turn is the
 // screen width. Three lives; a cleared wave brings a lower, faster one. Game over shows the score for 3 s, then a new
 // game starts by itself. A reboot goes home.
@@ -229,6 +229,7 @@ void app_aliens(void)
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
     xTaskCreate(draw_task, "aliens draw", 4096, NULL, 5, &drawer);
+    ui_keys("FIRE", "FIRE", "LEFT", "RIGHT");
     int ref = knob_angle(); // knob angle the gun last followed, -1 = no knob
     for (;;) {
         xSemaphoreTake(lock, portMAX_DELAY);
