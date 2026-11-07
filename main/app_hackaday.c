@@ -1,7 +1,8 @@
-// RSS reader, shared by Hackaday and News: rss_reader(feed URL, name). Joins Wi-Fi, reads the feed into PSRAM, shows
-// the list at once, then fetches the posts' images in the background on the same connection (Hackaday's WordPress
-// resizer and BBC's image server shrink them; stb_image decodes, Atkinson dithers to 1 bit). Wi-Fi goes off (and
-// ranging back on) when the images are in.
+// RSS reader, shared by Hackaday and News: rss_reader(feed URL, name). Joins Wi-Fi, reads the feed into PSRAM, then
+// browses it one post per screen: its featured image (the post's first picture) and title; A opens the full post
+// with its pictures. Images come in the background on the same connection (Hackaday's WordPress resizer and BBC's
+// image server shrink them; stb_image decodes, Atkinson dithers to 1 bit). Wi-Fi goes off (and ranging back on) when
+// the images are in.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,14 +22,16 @@
 #define MAXI 64           // images in all, at most PERP per post (~32 KB each once dithered)
 #define PERP 8
 #define MAXL 4000         // laid-out lines of the open post
-#define IW 640            // images fit inside IW x IH
+#define IW 640            // pictures in a post fit inside IW x IH
 #define IH 400
-#define WIPE_EVERY 6 // ponytail: scene changes (list<->post, page turns) between ghost wipes (2.8 s); tune on the badge
+#define CH 544            // featured images fit inside W x CH: the title and author go under it
+#define WIPE_EVERY 6 // ponytail: scene changes (posts, page turns) between ghost wipes (2.8 s); tune on the badge
 #define X0 32        // text column
 #define X1 (W - 24)  // right edge of the text; the scroll bar sits right of it
 
 typedef struct {
     char title[200], author[48], date[20];
+    int cover;  // its featured image (index in imgs), -1: none
     char *body; // cleaned text: '\n' between paragraphs, a byte 0x80 + image index alone on a line for an image
 } post_t;
 typedef struct {
@@ -46,7 +49,7 @@ static char *feed, *jpg;
 static char err[64];
 static volatile int stage, bytes, imgs_done, cur_post; // stage: 0 joining, 1 downloading, 2 feed ready, 3 failed
 static volatile int join_ms, feed_ms;
-static volatile bool net_stop, net_running;
+static volatile bool net_stop, net_running, reading; // reading: a post is open
 
 // ---- Text: HTML/XML/UTF-8 to the 7-bit font.
 static const char latin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy"; // U+00C0..U+00FF
@@ -100,19 +103,22 @@ static int add_img(int p, const char *s, const char *e, const char *u)
     if (nimg == MAXI || k == PERP || !attr(s, e, u, src, sizeof src)) return 0;
     if (attr(s, e, "width", v, sizeof v)) w = atoi(v);
     if (attr(s, e, "height", v, sizeof v)) h = atoi(v);
-    if (w && w < 64) return 0; // smileys and icons
+    char *q = strchr(src, '?'), *end = q ? q : src + strlen(src);
+    if ((w && w < 64) || (end - src > 4 && !strncmp(end - 4, ".gif", 4))) return 0; // smileys, icons, animations
     img_t *m = &imgs[nimg];
-    if (w <= 0 || h <= 0) w = 16, h = 9; // unknown: assume a wide picture
-    if (w * IH > h * IW) m->w = IW, m->h = IW * h / w; // the box it is scaled into
-    else m->h = IH, m->w = IH * w / h;
-    char *q = strchr(src, '?'), *bbc = strstr(src, "/standard/240/");
+    int bw = k ? IW : W, bh = k ? IH : CH; // the first one is the featured image: bigger
+    if (w <= 0 || h <= 0) w = 16, h = 9;   // unknown: assume a wide picture
+    if (w * bh > h * bw) m->w = bw, m->h = bw * h / w; // the box it is scaled into
+    else m->h = bh, m->w = bh * w / h;
+    char *bbc = strstr(src, "/standard/240/");
     if (strstr(src, "/wp-content/uploads/")) { // WordPress resizes on its own server: a ~40 KB JPEG
         if (q) *q = 0;
-        snprintf(m->url, sizeof m->url, "%s?fit=%d,%d&quality=40", src, IW, IH);
+        snprintf(m->url, sizeof m->url, "%s?fit=%d,%d&quality=40", src, m->w, m->h);
     } else if (bbc) // BBC thumbnails come in sizes: a sharper one
         snprintf(m->url, sizeof m->url, "%.*s/standard/624/%s", (int)(bbc - src), src, bbc + 14);
     else snprintf(m->url, sizeof m->url, "%s", src);
     m->post = p, m->bits = NULL, m->state = 0;
+    if (!k) posts[p].cover = nimg;
     return 0x80 + nimg++;
 }
 
@@ -198,6 +204,7 @@ static void parse(void)
         if (!(e = strstr(s, "</item>"))) break;
         int i = nposts++;
         post_t *p = &posts[i];
+        p->cover = -1;
         field(p->title, sizeof p->title, s, e, "title");
         field(p->author, sizeof p->author, s, e, "dc:creator");
         field(p->date, 17, s, e, "pubDate"); // "Sat, 07 Nov 2026"
@@ -258,7 +265,8 @@ static esp_http_client_handle_t client(void)
         .buffer_size = 16384, .keep_alive_enable = true, .event_handler = on_data});
 }
 
-// The image in jpg (n bytes): decode, scale into its box (area average), dither (Atkinson: crisp on e-paper).
+// The image in jpg (n bytes): decode, scale to fit its box m->w x m->h (area average), dither (Atkinson: crisp on
+// e-paper).
 static bool decode(img_t *m, int n)
 {
     int sw, sh, ch;
@@ -267,9 +275,8 @@ static bool decode(img_t *m, int n)
         ESP_LOGW("rss", "decode: %s", stbi_failure_reason());
         return false;
     }
-    int w = sw, h = sh;
-    if (w > IW) h = h * IW / w, w = IW;
-    if (h > IH) w = w * IH / h, h = IH;
+    int w = m->w, h = sh * m->w / sw;
+    if (h > m->h) h = m->h, w = sw * m->h / sh;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     int16_t *g = heap_caps_malloc(w * h * 2, MALLOC_CAP_SPIRAM);
@@ -343,11 +350,13 @@ static void net(void *arg)
         if (stage == 3) esp_http_client_cleanup(c), c = NULL; // else the images come over the same connection
     }
     while (c && !net_stop) {
-        int i = -1, cp = cur_post;
-        for (int k = 0; k < nimg && i < 0; k++)
-            if (!imgs[k].state && imgs[k].post == cp) i = k;
-        for (int k = 0; k < nimg && i < 0; k++)
-            if (!imgs[k].state) i = k;
+        // Next: the featured image on screen, the open post's pictures, the featured images after it, the rest.
+        int i = -1, best = 1 << 30, cp = cur_post;
+        for (int k = 0; k < nimg; k++) {
+            int p = imgs[k].post, cover = posts[p].cover == k;
+            int rank = p == cp && cover ? 0 : p == cp && reading ? 1 : cover ? 2 + (p - cp + nposts) % nposts : 100 + k;
+            if (!imgs[k].state && rank < best) best = rank, i = k;
+        }
         if (i < 0) break;
         int64_t t = esp_timer_get_time();
         int len = get(c, imgs[i].url, jpg, JCAP);
@@ -408,19 +417,6 @@ static void meta(char *o, int n, const post_t *p)
     snprintf(o, n, "%s%s%s", p->author, *p->author && *p->date ? ", " : "", p->date);
 }
 
-static void draw_list(int sel)
-{
-    char s[80];
-    memset(fb, 0, sizeof fb);
-    for (int i = 0, y = TOP + 8; i < nposts; i++, y += 60) {
-        if (i == sel) box(8, y, 12, 52, true);
-        int y2 = wrap(X0, y, 2, 18, 2, posts[i].title);
-        meta(s, sizeof s, &posts[i]);
-        text(64, y2, 2, s, true);
-    }
-    ui_frame(1);
-}
-
 // The open post laid out as lines: text (s, n at scale), an image (img >= 0) or a gap (neither); h px each.
 typedef struct {
     const char *s;
@@ -470,12 +466,35 @@ static int page_back(int top) // the top of the page before
     return top;
 }
 
-static void blit(const img_t *m, int x, int y, int maxh)
+// Image i at y, centred (featured images are wider than the text column), at most maxh px high.
+static void picture(int i, int y, int maxh)
 {
-    int st = (m->w + 7) / 8;
+    img_t *m = &imgs[i];
+    int x = m->w > X1 - X0 ? (W - m->w) / 2 : X0 + (X1 - X0 - m->w) / 2, st = (m->w + 7) / 8;
+    if (m->state <= 0) {
+        outline(x, y, m->w, maxh, 2);
+        text(x + 16, y + 16, 2, m->state ? "(no image)" : "(image loading)", true);
+        return;
+    }
     for (int r = 0; r < m->h && r < maxh; r++)
         for (int c = 0; c < m->w; c++)
             if (m->bits[r * st + c / 8] & 0x80 >> (c & 7)) fb[((y + r) * W + x + c) / 8] |= 0x80 >> ((x + c) & 7);
+}
+
+// The browser: post i's featured image, its title and author under it.
+static void draw_card(int i)
+{
+    char s[80];
+    post_t *p = &posts[i];
+    memset(fb, 0, sizeof fb);
+    int y = TOP + 8;
+    if (p->cover >= 0) picture(p->cover, TOP, imgs[p->cover].h), y = TOP + imgs[p->cover].h + 8;
+    y = p->cover >= 0 ? wrap(X0, y, 2, 20, 2, p->title) : wrap(X0, TOP + 48, 4, 40, 6, p->title) + 16;
+    meta(s, sizeof s - 12, p);
+    int n = strlen(s);
+    snprintf(s + n, sizeof s - n, "  %d/%d", i + 1, nposts);
+    text(X0, y, 2, s, true);
+    ui_frame(1);
 }
 
 static void draw_post(int top)
@@ -485,15 +504,7 @@ static void draw_post(int top)
     for (int i = top; i < end; y += lines[i++].h) {
         line_t *l = &lines[i];
         if (l->s) line(X0, y, l->scale, l->s, l->n);
-        else if (l->img >= 0) {
-            img_t *m = &imgs[l->img];
-            int x = X0 + (X1 - X0 - m->w) / 2;
-            if (m->state > 0) blit(m, x, y, l->h - 12); // decoded size can differ from the box by a pixel
-            else {
-                outline(x, y, m->w, l->h - 12, 2);
-                text(x + 16, y + 16, 2, m->state ? "(no image)" : "(image loading)", true);
-            }
-        }
+        else if (l->img >= 0) picture(l->img, y, l->h - 12); // decoded size can differ from the box by a pixel
     }
     if (top > 0 || end < nl) { // scroll bar
         int y0 = TOP + 8, sh = H - 8 - y0;
@@ -562,7 +573,7 @@ static void run(const char *name)
         stop_net();
         *err = 0;
         stage = bytes = cur_post = 0, net_stop = false, net_running = true;
-        xTaskCreate(net, "rss net", 16384, NULL, 4, NULL);
+        xTaskCreate(net, "rss net", 20480, NULL, 4, NULL); // TLS and stb_image
         ui_keys(NULL, NULL, NULL, NULL);
         loading(name);
         if (stage == 3) {
@@ -571,15 +582,15 @@ static void run(const char *name)
             while (wait_btn() != BTN_B) {}
             continue;
         }
-        for (int sel = 0, post = -1, top = 0;;) { // post < 0: the list
+        for (int sel = 0, post = -1, top = 0;;) { // post < 0: the browser
             bool scene = false;
-            cur_post = post < 0 ? sel : post; // its images are fetched first
-            if (post < 0) ui_keys("Up", "Down", "Open", "Refresh"), draw_list(sel);
-            else ui_keys("Up", "Down", post + 1 < nposts ? "Next post" : NULL, "List"), draw_post(top);
+            cur_post = post < 0 ? sel : post, reading = post >= 0; // its images are fetched first
+            if (post < 0) ui_keys("Prev", "Next", "Open", "Refresh"), draw_card(sel);
+            else ui_keys("Up", "Down", post + 1 < nposts ? "Next post" : NULL, "Back"), draw_post(top);
             int b = wait_btn();
             if (post < 0) {
-                if (b == BTN_PLUS && sel > 0) sel--;
-                else if (b == BTN_MINUS && sel < nposts - 1) sel++;
+                if (b == BTN_PLUS && sel > 0) sel--, scene = true;
+                else if (b == BTN_MINUS && sel < nposts - 1) sel++, scene = true;
                 else if (b == BTN_A) post = sel, top = 0, layout(post), scene = true;
                 else if (b == BTN_B) break; // refresh
             } else if (b == BTN_PLUS && top > 0) top = page_back(top), scene = true;
