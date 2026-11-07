@@ -70,6 +70,7 @@ void app_snake(void)
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
     xTaskCreate(draw_task, "snake draw", 4096, NULL, 5, &drawer);
+    ui_keys("Turn left", "Turn right", NULL, NULL);
     int ref = knob_angle(); // knob angle at the last turn, -1 = no knob
     for (;;) {
         int hd = 2, tl = 0, dir = 1, food; // dir clockwise from up: 0 up, 1 right, 2 down, 3 left
