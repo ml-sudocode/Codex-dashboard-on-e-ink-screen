@@ -53,6 +53,19 @@ void ranging_start(void);
 void ranging_stop(void);
 int ranging_get(range_t *out, int max); // pairs heard of in the last 30 s; returns how many it wrote
 void ranging_me(uint8_t mac[6]);        // this badge's id: its Wi-Fi station MAC (what other badges list it as)
+bool ranging_name(const uint8_t mac[6], char name[13]); // that badge's username from Settings, false if none (yet)
+void badge_id(char id[5]); // this badge's 4-hex-digit id, e.g. "9FCC": the last two bytes of ranging_me()
+
+// Settings, persisted (the Settings app edits them). cfg_get copies the value into out (n bytes) and returns its
+// length, or -1 if unset; "ssid" and "pass" fall back to the event Wi-Fi. cfg_set(key, NULL) deletes.
+// Keys: "name" (username, <= 12 chars: top bar, Radar), "ssid", "pass" (wifi_connect uses them),
+// "badge_text" (Badge app), "wx_lat", "wx_lon" (Weather app, decimal degrees as text).
+int cfg_get(const char *key, char *out, int n);
+bool cfg_set(const char *key, const char *val);
+// The Badge app's picture: W x (H - TOP) pixels, 1 bit, same layout as fb (1 = black), IMG_BYTES bytes.
+#define IMG_BYTES (W * (H - TOP) / 8)
+bool cfg_get_image(uint8_t *img); // false if none saved
+bool cfg_set_image(const uint8_t *img); // NULL deletes it
 int knob_angle(void); // AS5600 knob add-on on an SAO port: 0-4095 per turn, -1 if none or no magnet (plug in any time)
 int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: fails while Wi-Fi is busy)
 
@@ -68,3 +81,8 @@ void app_rocks(void);
 void app_radar(void);
 void app_source(void);
 void app_hackaday(void);
+void app_badge(void);
+void app_settings(void);
+void app_weather(void);
+void app_news(void);
+void app_gallery(void);

@@ -20,6 +20,7 @@
 #include "esp_wifi.h"
 #include "esp_now.h"
 #include "esp_mac.h"
+#include "esp_flash.h"
 #include "esp_random.h"
 #include "freertos/semphr.h"
 #include <stddef.h>
@@ -630,9 +631,11 @@ void wifi_on(void)
 
 bool wifi_connect(int timeout_ms)
 {
-    if (!*WIFI_SSID) return false;
+    wifi_config_t c = {0};
+    cfg_get("ssid", (char *)c.sta.ssid, sizeof c.sta.ssid); // Settings app, else the event Wi-Fi
+    cfg_get("pass", (char *)c.sta.password, sizeof c.sta.password);
+    if (!c.sta.ssid[0]) return false;
     wifi_on();
-    wifi_config_t c = {.sta = {.ssid = WIFI_SSID, .password = WIFI_PASS}};
     esp_wifi_set_config(WIFI_IF_STA, &c);
     wifi_join = true;
     esp_wifi_set_ps(WIFI_PS_NONE); // modem sleep slows downloads a lot (Online update); the radio is busy anyway
@@ -675,6 +678,7 @@ typedef struct __attribute__((packed)) {
 // multipath only ever makes the path longer).
 static struct {
     uint8_t a[6], b[6], ap[6];
+    char name[13]; // own entries: b's username from its beacon, "" if none
     int16_t cm, hist[4];
     int64_t seen, at; // last beacon about this pair, last distance
 } rng[RNG_KEEP];
@@ -706,6 +710,8 @@ static void rng_recv(const esp_now_recv_info_t *info, const uint8_t *d, int len)
     if (!rng[i].seen) ESP_LOGI(TAG, "ranging: new badge %02x%02x", info->src_addr[4], info->src_addr[5]);
     memcpy(rng[i].ap, m->ap, 6);
     rng[i].seen = now;
+    int tail = head + m->n * (int)sizeof m->r[0]; // the username follows the ranges (badges before v0.7 send none)
+    if (len >= tail + 12) memcpy(rng[i].name, d + tail, 12), rng[i].name[12] = 0;
     for (int k = 0; k < m->n; k++) { // what it measured
         int j = rng_slot(info->src_addr, m->r[k].mac);
         rng[j].cm = m->r[k].cm, rng[j].seen = rng[j].at = now;
@@ -720,6 +726,7 @@ static void rng_task(void *arg)
     for (int next = 0; rng_run;) {
         int64_t now = esp_timer_get_time();
         if (now >= beacon) {
+            static uint8_t buf[sizeof(rng_beacon_t) + 12];
             rng_beacon_t m = {.magic = {'B', 'O', 'S', 'R'}};
             esp_wifi_get_mac(WIFI_IF_AP, m.ap);
             xSemaphoreTake(rng_lock, portMAX_DELAY);
@@ -727,7 +734,12 @@ static void rng_task(void *arg)
                 if (!memcmp(rng[i].a, rng_me, 6) && rng[i].cm >= 0 && now - rng[i].at < RNG_STALE_US)
                     memcpy(m.r[m.n].mac, rng[i].b, 6), m.r[m.n++].cm = rng[i].cm;
             xSemaphoreGive(rng_lock);
-            esp_now_send(all, (const uint8_t *)&m, offsetof(rng_beacon_t, r) + m.n * sizeof m.r[0]);
+            int len = offsetof(rng_beacon_t, r) + m.n * sizeof m.r[0];
+            char name[13] = "";
+            cfg_get("name", name, sizeof name);
+            memcpy(buf, &m, len);
+            memcpy(buf + len, name, 12); // username, zero padded
+            esp_now_send(all, buf, len + 12);
             beacon = now + 800000 + esp_random() % 400000; // ~1 s, jittered so two badges do not keep colliding
         }
         // FTM to the next badge heard from in the last 10 s, round robin
@@ -819,6 +831,73 @@ int ranging_get(range_t *out, int max)
 }
 
 void ranging_me(uint8_t mac[6]) { esp_read_mac(mac, ESP_MAC_WIFI_STA); }
+
+bool ranging_name(const uint8_t mac[6], char name[13])
+{
+    bool ok = false;
+    *name = 0;
+    if (!rng_lock) return false;
+    xSemaphoreTake(rng_lock, portMAX_DELAY);
+    for (int i = 0; i < RNG_KEEP && !ok; i++)
+        if (!memcmp(rng[i].a, rng_me, 6) && !memcmp(rng[i].b, mac, 6) && rng[i].name[0]) strcpy(name, rng[i].name), ok = true;
+    xSemaphoreGive(rng_lock);
+    return ok;
+}
+
+void badge_id(char id[5])
+{
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    sprintf(id, "%02X%02X", mac[4], mac[5]); // as Radar shows it
+}
+
+// ---- Settings (the Settings app writes them): short strings in NVS namespace "cfg"; the Badge app's picture
+// raw in flash at IMG_ADDR, right after the coredump partition. partitions.csv lists it as "img", but badges updated
+// over the air keep their old partition table, so the code uses the address, not the table.
+#define IMG_ADDR 0x630000
+#define IMG_MAGIC 0x31474D49 // "IMG1", written last: a cut-off write reads as no picture
+
+int cfg_get(const char *key, char *out, int n)
+{
+    nvs_handle_t h;
+    size_t len = n;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        esp_err_t e = nvs_get_str(h, key, out, &len);
+        nvs_close(h);
+        if (e == ESP_OK) return strlen(out);
+    }
+    const char *def = !strcmp(key, "ssid") ? WIFI_SSID : !strcmp(key, "pass") ? WIFI_PASS : NULL; // event Wi-Fi
+    if (n) *out = 0;
+    if (!def) return -1;
+    snprintf(out, n, "%s", def);
+    return strlen(out);
+}
+
+bool cfg_set(const char *key, const char *val)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = val ? nvs_set_str(h, key, val) : nvs_erase_key(h, key);
+    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool cfg_get_image(uint8_t *img)
+{
+    uint32_t magic = 0;
+    return esp_flash_read(NULL, &magic, IMG_ADDR, 4) == ESP_OK && magic == IMG_MAGIC &&
+           esp_flash_read(NULL, img, IMG_ADDR + 4, IMG_BYTES) == ESP_OK;
+}
+
+bool cfg_set_image(const uint8_t *img)
+{
+    if (esp_flash_erase_region(NULL, IMG_ADDR, (4 + IMG_BYTES + 4095) & ~4095) != ESP_OK) return false;
+    uint32_t magic = IMG_MAGIC;
+    return !img || (esp_flash_write(NULL, img, IMG_ADDR + 4, IMG_BYTES) == ESP_OK &&
+                    esp_flash_write(NULL, &magic, IMG_ADDR, 4) == ESP_OK);
+}
 
 // ---- SAO add-ons share one I2C bus: GPIO17 SDA / GPIO18 SCL, 5.1k pull-ups on the badge (DEVICE_INFO.md).
 // The knob add-on is an AS5600 magnetic encoder at 0x36 (its analog out is on the port's GPIO1, a NeoPixel on GPIO2).
@@ -928,12 +1007,14 @@ static void draw_bar(void)
     static const int ky[4] = {4, 4, 26, 26}; // label rows of BTN_PLUS, BTN_MINUS, BTN_A, BTN_B
     static int pct = -2;
     static int64_t next;
+    static char name[13];
     if (esp_timer_get_time() >= next) { // every 30 s, so the bar sits still
         pct = battery_pct();
+        cfg_get("name", name, sizeof name);
         next = esp_timer_get_time() + 30000000;
     }
-    char mid[48];
-    int n = snprintf(mid, sizeof mid, "badge os v%s", esp_app_get_description()->version);
+    char mid[64];
+    int n = snprintf(mid, sizeof mid, "%s%sv%s", name, *name ? "  " : "", esp_app_get_description()->version);
     if (pct == -1) snprintf(mid + n, sizeof mid - n, "  USB");
     else if (pct >= 0) snprintf(mid + n, sizeof mid - n, "  %d%%", pct);
     box(0, 0, W, TOP, false);
@@ -1049,6 +1130,53 @@ static void icon_feed(int x, int y) // news feed: a dot and two arcs from the bo
         }
 }
 
+static void icon_badge(int x, int y) // a name tag: a white card with a black band and a name line
+{
+    icon_base(x, y);
+    box(x + 24, y + 40, 128, 96, false);
+    box(x + 24, y + 40, 128, 28, true);
+    box(x + 40, y + 96, 96, 10, true);
+}
+
+static void icon_settings(int x, int y) // a gear
+{
+    icon_base(x, y);
+    int c = ICON / 2;
+    for (int r = 0; r < ICON; r++)
+        for (int k = 0; k < ICON; k++) {
+            int dx = k - c, dy = r - c, d2 = dx * dx + dy * dy;
+            bool tooth = d2 < 64 * 64 && (abs(dx) < 12 || abs(dy) < 12 || abs(dx - dy) < 16 || abs(dx + dy) < 16);
+            if ((d2 < 46 * 46 || tooth) && d2 > 20 * 20) box(x + k, y + r, 1, 1, false);
+        }
+}
+
+static void icon_weather(int x, int y) // a sun behind a cloud
+{
+    icon_base(x, y);
+    for (int r = 0; r < ICON; r++)
+        for (int k = 0; k < ICON; k++) {
+            int sx = k - 112, sy = r - 64, a = k - 70, b = r - 108, d = k - 112, e = r - 112;
+            if (sx * sx + sy * sy < 34 * 34 || a * a + b * b < 30 * 30 || d * d + e * e < 24 * 24) box(x + k, y + r, 1, 1, false);
+        }
+    box(x + 40, y + 112, 96, 24, false);
+}
+
+static void icon_news(int x, int y) // a page of headlines
+{
+    icon_base(x, y);
+    box(x + 32, y + 28, 112, 120, false);
+    box(x + 44, y + 40, 88, 16, true);
+    for (int k = 0; k < 4; k++) box(x + 44, y + 68 + k * 18, k == 3 ? 56 : 88, 6, true);
+}
+
+static void icon_gallery(int x, int y) // a framed picture: sun and mountains
+{
+    icon_base(x, y);
+    outline(x + 24, y + 36, 128, 104, 8);
+    box(x + 104, y + 52, 20, 20, false);
+    for (int r = 0; r < 48; r++) box(x + 76 - r, y + 84 + r, 2 * r + 1, 1, false), box(x + 112 - r / 2, y + 108 + r / 2, r + 1, 1, false);
+}
+
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
 {
     icon_base(x, y);
@@ -1069,6 +1197,7 @@ typedef struct {
 } app_t;
 
 static const app_t apps[] = {
+    {"Badge", icon_badge, app_badge}, // the name tag first: what a badge is for
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
     {"Snake", icon_snake, app_snake},
@@ -1079,6 +1208,10 @@ static const app_t apps[] = {
     {"Radar", icon_radar, app_radar},
     {"Source", icon_source, app_source},
     {"Hackaday", icon_feed, app_hackaday},
+    {"News", icon_news, app_news},
+    {"Gallery", icon_gallery, app_gallery},
+    {"Weather", icon_weather, app_weather},
+    {"Settings", icon_settings, app_settings},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
