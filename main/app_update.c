@@ -125,8 +125,7 @@ static void wired(void)
             char s[8];
             snprintf(s, sizeof s, "%d%%", p);
             memset(fb, 0, sizeof fb);
-            // ui_frame refreshes only the changed rows, top-down: the bar and the number sit at the top, alone in
-            // their rows, so a step costs ~1/5 of a full frame. The static text below is never redrawn.
+            // Only changed pixels move: the bar only grows, so just the number leaves a light ghost as it changes.
             outline(48, 48, 720, 96, 6);
             box(60, 60, 696 * p / 100, 72, true);
             text(800, 80, 4, s, true);
