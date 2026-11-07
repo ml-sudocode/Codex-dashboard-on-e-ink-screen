@@ -1013,10 +1013,10 @@ static void draw_bar(void)
         cfg_get("name", name, sizeof name);
         next = esp_timer_get_time() + 30000000;
     }
-    char mid[64];
+    char mid[64], bat[8] = "USB";
     int n = snprintf(mid, sizeof mid, "%s%sv%s", name, *name ? "  " : "", esp_app_get_description()->version);
-    if (pct == -1) snprintf(mid + n, sizeof mid - n, "  USB");
-    else if (pct >= 0) snprintf(mid + n, sizeof mid - n, "  %d%%", pct);
+    if (pct >= 0) snprintf(bat, sizeof bat, "%d%%", pct);
+    int x = (W - n * 16 - (pct == -2 ? 0 : 32 + 38 + (int)strlen(bat) * 16)) / 2; // centre: text, battery, its label
     box(0, 0, W, TOP, false);
     for (int k = 0; k < 4; k++) {
         if (!keys[k] || !*keys[k]) continue;
@@ -1025,7 +1025,14 @@ static void draw_bar(void)
         text(left ? 14 : W - 14 - (int)strlen(keys[k]) * 16, ky[k], 2, keys[k], true);
     }
     text((W - (int)strlen(bar_app) * 16) / 2, 4, 2, bar_app, true);
-    text((W - (int)strlen(mid) * 16) / 2, 26, 2, mid, true);
+    text(x, 26, 2, mid, true);
+    if (pct != -2) { // a battery outline filled to the charge (full on USB), then "87%" or "USB"
+        x += n * 16 + 32;
+        outline(x, 27, 30, 14, 2);
+        box(x + 30, 31, 3, 6, true);
+        box(x + 4, 31, pct < 0 ? 22 : 22 * pct / 100, 6, true);
+        text(x + 38, 26, 2, bat, true);
+    }
     box(0, TOP - 4, W, 2, true);
 }
 
