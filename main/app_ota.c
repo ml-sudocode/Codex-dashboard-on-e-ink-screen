@@ -65,7 +65,7 @@ static void run(void)
     snprintf(s, sizeof s, "This badge: v%s", ours);
     ui_wipe(); // we come right after another app's screen
     memset(fb, 0, sizeof fb);
-    y = 48;
+    y = TOP + 24; // below the OS top bar
     say(6, "Online update");
     say(3, s);
     say(4, "Checking for updates...");
