@@ -33,6 +33,19 @@ int btn_held(void); // buttons held right now: bit (1 << BTN_x) set while presse
 void wifi_on(void);                 // radio on, station mode, no network joined (ESP-NOW apps: set the channel next)
 bool wifi_connect(int timeout_ms); // wifi_on + join the badge Wi-Fi (main/wifi_secret.h); true once there is an IP
 void wifi_off(void);                // radio off
+// Ranging (Radar and any app): badges running badge os find each other (ESP-NOW beacons, channel 1) and measure
+// their distance with Wi-Fi FTM; each badge shares its own ranges, so you also get the distances between others.
+// ranging_start turns Wi-Fi on (APSTA, hidden SoftAP as the FTM responder); ranging_stop or wifi_off ends it.
+// Don't use ESP-NOW yourself or call wifi_connect while it runs: it owns the radio and channel 1.
+typedef struct {
+    uint8_t a[6], b[6]; // a measured b; a = ranging_me() for this badge's own ranges
+    int16_t cm;         // distance, -1 = b heard but not measured yet; FTM: ~1-2 m typical error, 5-10 m outliers
+    uint32_t age_ms;    // age of cm (or of the last beacon while cm is -1)
+} range_t;
+void ranging_start(void);
+void ranging_stop(void);
+int ranging_get(range_t *out, int max); // pairs heard of in the last 30 s; returns how many it wrote
+void ranging_me(uint8_t mac[6]);        // this badge's id: its Wi-Fi station MAC (what other badges list it as)
 int knob_angle(void); // AS5600 knob add-on on an SAO port: 0-4095 per turn, -1 if none or no magnet (plug in any time)
 int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: fails while Wi-Fi is busy)
 
