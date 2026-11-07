@@ -323,7 +323,7 @@ static void epd_init(void)
 // epd_sleep()           ends the partial session with the normal DC-DC soft shutdown. Call it when updates stop.
 // Planes: 960x672 MONO_HLSB, 1 = ink, as everywhere in main.c.
 
-#define PART_DRIVE 19 // frames of VDH/VDL per change: 19 fills the 20-frame pull; 6 is the least that reads clearly
+#define PART_DRIVE 10 // frames of VDH/VDL per change (of 20 per pull): 10 for the film's health (owner); 6 is the least that reads clearly
 _Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 19, "the pull has 20 frames and the last one must be GND");
 
 static uint8_t part_shown[PLANE]; // what the film shows; after every pull the CoG's 0x11 holds the same
