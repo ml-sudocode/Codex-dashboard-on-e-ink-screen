@@ -602,6 +602,8 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_FTM_REPORT) { // ranging: one FTM session done
         wifi_event_ftm_report_t *r = data;
         ftm_cm = r->status == FTM_STATUS_SUCCESS ? (int)r->dist_est : -1;
+        ESP_LOGI(TAG, "ftm %02x%02x: status %d, rtt %u ns, %u cm", r->peer_mac[4], r->peer_mac[5], r->status,
+                 (unsigned)r->rtt_est, (unsigned)r->dist_est);
         xEventGroupSetBits(wifi_ev, 2);
     }
     if (base == WIFI_EVENT && (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED) && wifi_join)
@@ -700,6 +702,7 @@ static void rng_recv(const esp_now_recv_info_t *info, const uint8_t *d, int len)
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(rng_lock, portMAX_DELAY);
     int i = rng_slot(rng_me, info->src_addr); // a badge nearby: range it
+    if (!rng[i].seen) ESP_LOGI(TAG, "ranging: new badge %02x%02x", info->src_addr[4], info->src_addr[5]);
     memcpy(rng[i].ap, m->ap, 6);
     rng[i].seen = now;
     for (int k = 0; k < m->n; k++) { // what it measured
@@ -743,7 +746,9 @@ static void rng_task(void *arg)
         wifi_ftm_initiator_cfg_t cfg = {.channel = RNG_CH, .frm_count = RNG_FRAMES, .burst_period = 2};
         memcpy(cfg.resp_mac, ap, 6);
         xEventGroupClearBits(wifi_ev, 2);
-        if (esp_wifi_ftm_initiate_session(&cfg) == ESP_OK &&
+        esp_err_t e = esp_wifi_ftm_initiate_session(&cfg);
+        if (e != ESP_OK) ESP_LOGW(TAG, "ftm %02x%02x: start failed: %s", ap[4], ap[5], esp_err_to_name(e));
+        if (e == ESP_OK &&
             (xEventGroupWaitBits(wifi_ev, 2, true, true, pdMS_TO_TICKS(2000)) & 2) && ftm_cm >= 0) {
             xSemaphoreTake(rng_lock, portMAX_DELAY);
             int i = rng_slot(rng_me, b), cm = MAX(0, ftm_cm - RNG_OFFSET_CM);
