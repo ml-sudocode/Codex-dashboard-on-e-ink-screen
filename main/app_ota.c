@@ -51,7 +51,7 @@ static void done(const char *l1, const char *l2) // final message, then back on 
 {
     say(4, l1);
     if (l2) say(3, l2);
-    text(48, 600, 3, "Any button goes back.", true);
+    ui_keys("Back", "Back", "Back", "Back"); // any button
     ui_frame(1);
     ui_close();
     btn_flush();
