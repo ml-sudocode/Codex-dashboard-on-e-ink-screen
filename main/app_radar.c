@@ -1,5 +1,5 @@
 // Radar: badges running badge os nearby, by id (last 4 hex digits of the MAC) and distance (OS ranging, Wi-Fi FTM).
-// With 3+ measured badges it also draws a 2D map centred on this badge, fitted to every shared distance.
+// With 2+ measured badges (3 with this one) it also draws a 2D map centred on this badge, fitted to every shared distance.
 // No compass: the map's rotation and mirror are arbitrary (kept steady between frames).
 #include <math.h>
 #include <stdio.h>
@@ -144,7 +144,7 @@ void app_radar(void)
         if (nn == 1) text(24, TOP + 96, 3, "Looking...", true);
 
         int cx = MAP_X + (W - MAP_X) / 2, cy = TOP + (H - TOP) / 2;
-        if (measured >= 3) {
+        if (measured >= 2) { // 3 badges with this one
             layout(cm);
             float far = 0;
             for (int i = 1; i < nn; i++)
