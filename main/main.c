@@ -1013,7 +1013,7 @@ static void draw_bar(void)
         cfg_get("name", name, sizeof name);
         next = esp_timer_get_time() + 30000000;
     }
-    char mid[64], bat[8] = "USB";
+    char mid[64], bat[16] = "USB";
     int n = snprintf(mid, sizeof mid, "%s%sv%s", name, *name ? "  " : "", esp_app_get_description()->version);
     if (pct >= 0) snprintf(bat, sizeof bat, "%d%%", pct);
     int x = (W - n * 16 - (pct == -2 ? 0 : 32 + 38 + (int)strlen(bat) * 16)) / 2; // centre: text, battery, its label
