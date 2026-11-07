@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c" "app_update.c" "app_pong.c" "app_ota.c" "app_snake.c" "app_life.c" "app_aliens.c" "app_blocks.c" "app_rocks.c" "app_radar.c" "app_source.c")
+idf_component_register(SRCS "main.c" "app_update.c" "app_pong.c" "app_ota.c" "app_snake.c" "app_life.c" "app_aliens.c" "app_blocks.c" "app_rocks.c" "app_radar.c" "app_source.c" "app_hackaday.c")

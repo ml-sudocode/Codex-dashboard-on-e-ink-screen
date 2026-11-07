@@ -67,3 +67,4 @@ void app_blocks(void);
 void app_rocks(void);
 void app_radar(void);
 void app_source(void);
+void app_hackaday(void);

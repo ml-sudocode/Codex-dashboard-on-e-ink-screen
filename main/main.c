@@ -1037,6 +1037,18 @@ static void icon_source(int x, int y) // three QR finder squares and some module
     for (int i = 0; i < 6; i++) box(x + m[i][0], y + m[i][1], 12, 12, false);
 }
 
+static void icon_feed(int x, int y) // news feed: a dot and two arcs from the bottom left corner
+{
+    icon_base(x, y);
+    int cx = x + 44, cy = y + ICON - 44;
+    for (int r = 0; r < ICON; r++)
+        for (int k = 0; k < ICON; k++) {
+            int dx = x + k - cx, dy = cy - (y + r), d2 = dx * dx + dy * dy;
+            if (dx >= -12 && dy >= -12 && (d2 < 14 * 14 || (d2 > 50 * 50 && d2 < 68 * 68) || (d2 > 86 * 86 && d2 < 104 * 104)))
+                box(x + k, y + r, 1, 1, false);
+        }
+}
+
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
 {
     icon_base(x, y);
@@ -1066,6 +1078,7 @@ static const app_t apps[] = {
     {"Asteroids", icon_rocks, app_rocks},
     {"Radar", icon_radar, app_radar},
     {"Source", icon_source, app_source},
+    {"Hackaday", icon_feed, app_hackaday},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
