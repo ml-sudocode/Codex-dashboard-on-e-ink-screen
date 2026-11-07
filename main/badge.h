@@ -59,7 +59,9 @@ void badge_id(char id[5]); // this badge's 4-hex-digit id, e.g. "9FCC": the last
 // Settings, persisted (the Settings app edits them). cfg_get copies the value into out (n bytes) and returns its
 // length, or -1 if unset; "ssid" and "pass" fall back to the event Wi-Fi. cfg_set(key, NULL) deletes.
 // Keys: "name" (username, <= 12 chars: top bar, Radar), "ssid", "pass" (wifi_connect uses them),
-// "badge_text" (Badge app), "wx_lat", "wx_lon" (Weather app, decimal degrees as text).
+// "badge_text" (Badge app), "wx_city" (Weather: a place name as typed, e.g. "Istanbul"; the Weather app looks it up
+// online with Open-Meteo geocoding and saves the result), "wx_lat", "wx_lon" (Weather, decimal degrees as text;
+// default Pasadena when unset).
 int cfg_get(const char *key, char *out, int n);
 bool cfg_set(const char *key, const char *val);
 // The Badge app's picture: W x (H - TOP) pixels, 1 bit, same layout as fb (1 = black), IMG_BYTES bytes.
