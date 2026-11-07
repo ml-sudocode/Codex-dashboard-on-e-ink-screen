@@ -1,6 +1,6 @@
 // Radar: badges running badge os nearby, by id (last 4 hex digits of the MAC) and distance (OS ranging, Wi-Fi FTM).
 // With 3+ measured badges it also draws a 2D map centred on this badge, fitted to every shared distance.
-// No compass: the map's rotation and mirror are arbitrary (kept steady between frames). A wipes ghosts, B goes home.
+// No compass: the map's rotation and mirror are arbitrary (kept steady between frames).
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -89,7 +89,7 @@ void app_radar(void)
     static int cnt[NODES][NODES];
     uint8_t me[6];
     ranging_me(me);
-    ranging_start();
+    ui_keys(NULL, NULL, "clear ghosts", "home");
     for (;;) {
         int n = ranging_get(r, 64);
 
@@ -171,14 +171,10 @@ void app_radar(void)
         } else {
             text(MAP_X + 24, cy - 12, 3, "Map: needs 3+ badges", true);
         }
-        text(24, H - 24, 2, "A: clear ghosts  B: home", true);
         ui_frame(1); // no change since the last frame = no refresh
 
         int b = btn_get(1000);
         if (b == BTN_A) ui_wipe();
-        if (b == BTN_B) {
-            ranging_stop();
-            return;
-        }
+        if (b == BTN_B) return; // the OS keeps ranging on every screen
     }
 }
