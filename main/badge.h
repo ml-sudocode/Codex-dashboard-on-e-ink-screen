@@ -61,7 +61,8 @@ void badge_id(char id[5]); // this badge's 4-hex-digit id, e.g. "9FCC": the last
 // Keys: "name" (username, <= 12 chars: top bar, Radar), "ssid", "pass" (wifi_connect uses them),
 // "badge_text" (Badge app), "wx_city" (Weather: a place name as typed, e.g. "Istanbul"; the Weather app looks it up
 // online with Open-Meteo geocoding and saves the result), "wx_lat", "wx_lon" (Weather, decimal degrees as text;
-// default Pasadena when unset).
+// default Pasadena when unset), "wx_place" (Weather: the looked-up "Name, Country" for display), "wx_unit"
+// ("F" = Fahrenheit and mph; anything else or unset = Celsius and km/h).
 int cfg_get(const char *key, char *out, int n);
 bool cfg_set(const char *key, const char *val);
 // The Badge app's picture: W x (H - TOP) pixels, 1 bit, same layout as fb (1 = black), IMG_BYTES bytes.
