@@ -1,6 +1,7 @@
 // RSS reader, shared by Hackaday and News: rss_reader(feed URL, name). Joins Wi-Fi, reads the feed into PSRAM, shows
-// the list at once, then fetches the posts' images in the background through wsrv.nl (downscaled to a small JPEG,
-// decoded by the ROM's TJpgDec, dithered to 1 bit). Wi-Fi goes off (and ranging back on) when the images are in.
+// the list at once, then fetches the posts' images in the background on the same connection (Hackaday's WordPress
+// resizer and BBC's image server shrink them; stb_image decodes, Atkinson dithers to 1 bit). Wi-Fi goes off (and
+// ranging back on) when the images are in.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,18 +12,17 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "rom/tjpgd.h"
 #include "badge.h"
+#include "stb_image.h" // the implementation lives in app_gallery.c (PSRAM allocations)
 
 #define CAP (1024 * 1024) // feed buffer in PSRAM; Hackaday's feed carries full post bodies (~100-300 KB)
-#define JCAP (256 * 1024) // one downscaled JPEG
+#define JCAP (768 * 1024) // one image (resized JPEGs are ~40 KB; other PNGs and GIFs can be big), or the gzipped feed
 #define MAXP 10           // posts
 #define MAXI 64           // images in all, at most PERP per post (~32 KB each once dithered)
 #define PERP 8
 #define MAXL 4000         // laid-out lines of the open post
-#define IW 640            // images fit inside IW x IH (wsrv.nl scales them)
+#define IW 640            // images fit inside IW x IH
 #define IH 400
-#define PROXY "https://wsrv.nl/?w=640&h=400&fit=inside&output=jpg&q=40&url="
 #define WIPE_EVERY 6 // ponytail: scene changes (list<->post, page turns) between ghost wipes (2.8 s); tune on the badge
 #define X0 32        // text column
 #define X1 (W - 24)  // right edge of the text; the scroll bar sits right of it
@@ -32,7 +32,7 @@ typedef struct {
     char *body; // cleaned text: '\n' between paragraphs, a byte 0x80 + image index alone on a line for an image
 } post_t;
 typedef struct {
-    char url[400];  // the proxy URL
+    char url[400];
     int post, w, h; // w, h: the box it gets (from the tag's width/height), then what was decoded
     uint8_t *bits;  // 1 bit per pixel, rows of (w + 7) / 8 bytes, 1 = ink
     volatile int8_t state; // 0 to fetch, 1 ready, -1 failed
@@ -103,16 +103,15 @@ static int add_img(int p, const char *s, const char *e, const char *u)
     if (w && w < 64) return 0; // smileys and icons
     img_t *m = &imgs[nimg];
     if (w <= 0 || h <= 0) w = 16, h = 9; // unknown: assume a wide picture
-    if (w * IH > h * IW) m->w = IW, m->h = IW * h / w; // the box wsrv.nl fits it into
+    if (w * IH > h * IW) m->w = IW, m->h = IW * h / w; // the box it is scaled into
     else m->h = IH, m->w = IH * w / h;
-    int n = snprintf(m->url, sizeof m->url, PROXY);
-    for (const char *c = src; *c && n < sizeof m->url - 4; c++) { // percent-encode the image URL
-        if (!strncmp(c, "&amp;", 5)) c += 4;
-        if (strchr("-._~/:", *c) || (*c >= '0' && *c <= '9') || ((*c | 32) >= 'a' && (*c | 32) <= 'z'))
-            m->url[n++] = *c;
-        else n += sprintf(m->url + n, "%%%02X", (unsigned char)*c);
-    }
-    m->url[n] = 0;
+    char *q = strchr(src, '?'), *bbc = strstr(src, "/standard/240/");
+    if (strstr(src, "/wp-content/uploads/")) { // WordPress resizes on its own server: a ~40 KB JPEG
+        if (q) *q = 0;
+        snprintf(m->url, sizeof m->url, "%s?fit=%d,%d&quality=40", src, IW, IH);
+    } else if (bbc) // BBC thumbnails come in sizes: a sharper one
+        snprintf(m->url, sizeof m->url, "%.*s/standard/624/%s", (int)(bbc - src), src, bbc + 14);
+    else snprintf(m->url, sizeof m->url, "%s", src);
     m->post = p, m->bits = NULL, m->state = 0;
     return 0x80 + nimg++;
 }
@@ -231,7 +230,7 @@ static esp_err_t on_data(esp_http_client_event_t *e)
     int len = e->data_len < k->cap - 1 - k->n ? e->data_len : k->cap - 1 - k->n;
     memcpy(k->buf + k->n, e->data, len);
     k->n += len;
-    if (k->buf == feed) bytes = k->n;
+    if (stage == 1) bytes = k->n;
     return ESP_OK;
 }
 
@@ -259,58 +258,70 @@ static esp_http_client_handle_t client(void)
         .buffer_size = 16384, .keep_alive_enable = true, .event_handler = on_data});
 }
 
-typedef struct {
-    int n, pos, w, h;
-    int16_t *g; // grey, w x h
-} jdev_t;
-
-static UINT jin(JDEC *jd, BYTE *buf, UINT len)
-{
-    jdev_t *d = jd->device;
-    if (len > d->n - d->pos) len = d->n - d->pos;
-    if (buf) memcpy(buf, jpg + d->pos, len);
-    d->pos += len;
-    return len;
-}
-
-static UINT jout(JDEC *jd, void *bm, JRECT *r)
-{
-    jdev_t *d = jd->device;
-    BYTE *p = bm;
-    for (int y = r->top; y <= r->bottom; y++)
-        for (int x = r->left; x <= r->right; x++, p += 3)
-            if (x < d->w && y < d->h) d->g[y * d->w + x] = (p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8;
-    return 1;
-}
-
-// The JPEG in jpg (n bytes): decode, dither (Atkinson: crisp on e-paper), keep the bits in m.
+// The image in jpg (n bytes): decode, scale into its box (area average), dither (Atkinson: crisp on e-paper).
 static bool decode(img_t *m, int n)
 {
-    static uint8_t pool[4096];
-    JDEC jd;
-    jdev_t d = {.n = n};
-    if (jd_prepare(&jd, jin, pool, sizeof pool, &d) != JDR_OK) return false;
-    d.w = jd.width < IW ? jd.width : IW;
-    d.h = jd.height < IH ? jd.height : IH;
-    d.g = heap_caps_malloc(d.w * d.h * 2, MALLOC_CAP_SPIRAM);
-    int st = (d.w + 7) / 8;
-    uint8_t *bits = heap_caps_calloc(st * d.h, 1, MALLOC_CAP_SPIRAM);
-    if (!d.g || !bits || jd_decomp(&jd, jout, 0) != JDR_OK) {
-        free(d.g), free(bits);
+    int sw, sh, ch;
+    uint8_t *src = stbi_load_from_memory((uint8_t *)jpg, n, &sw, &sh, &ch, 1);
+    if (!src) {
+        ESP_LOGW("rss", "decode: %s", stbi_failure_reason());
         return false;
     }
+    int w = sw, h = sh;
+    if (w > IW) h = h * IW / w, w = IW;
+    if (h > IH) w = w * IH / h, h = IH;
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    int16_t *g = heap_caps_malloc(w * h * 2, MALLOC_CAP_SPIRAM);
+    int st = (w + 7) / 8;
+    uint8_t *bits = heap_caps_calloc(st * h, 1, MALLOC_CAP_SPIRAM);
+    if (!g || !bits) {
+        free(g), free(bits), stbi_image_free(src);
+        return false;
+    }
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int x0 = x * sw / w, x1 = (x + 1) * sw / w, y0 = y * sh / h, y1 = (y + 1) * sh / h, sum = 0, k = 0;
+            for (int yy = y0; yy < y1 || yy == y0; yy++)
+                for (int xx = x0; xx < x1 || xx == x0; xx++) sum += src[yy * sw + xx], k++;
+            g[y * w + x] = sum / k;
+        }
+    stbi_image_free(src);
     static const int8_t dx[] = {1, 2, -1, 0, 1, 0}, dy[] = {0, 0, 1, 1, 1, 2};
-    for (int y = 0; y < d.h; y++)
-        for (int x = 0; x < d.w; x++) {
-            int16_t *g = &d.g[y * d.w + x];
-            int v = *g < 128 ? 0 : 255, er = (*g - v) / 8;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int16_t *p = &g[y * w + x];
+            int v = *p < 128 ? 0 : 255, er = (*p - v) / 8;
             if (!v) bits[y * st + x / 8] |= 0x80 >> (x & 7);
             for (int k = 0; k < 6; k++)
-                if (x + dx[k] >= 0 && x + dx[k] < d.w && y + dy[k] < d.h) g[dy[k] * d.w + dx[k]] += er;
+                if (x + dx[k] >= 0 && x + dx[k] < w && y + dy[k] < h) p[dy[k] * w + dx[k]] += er;
         }
-    free(d.g);
-    m->w = d.w, m->h = d.h, m->bits = bits;
+    free(g);
+    m->w = w, m->h = h, m->bits = bits;
     return true;
+}
+
+// The feed, asked for gzipped (a third of the bytes): read into jpg, inflated into feed. -1 on error.
+static int get_feed(esp_http_client_handle_t c)
+{
+    esp_http_client_set_header(c, "Accept-Encoding", "gzip");
+    int n = get(c, feed_url, jpg, JCAP);
+    esp_http_client_delete_header(c, "Accept-Encoding");
+    const uint8_t *z = (uint8_t *)jpg;
+    if (n < 18 || z[0] != 0x1F || z[1] != 0x8B) { // the server sent it plain
+        if (n > 0) memcpy(feed, jpg, n + 1);
+        return n;
+    }
+    const uint8_t *p = z + 10;
+    if (z[3] & 4) p += 2 + (p[0] | p[1] << 8); // FEXTRA
+    if (z[3] & 8) p += strlen((char *)p) + 1;  // FNAME
+    if (z[3] & 16) p += strlen((char *)p) + 1; // FCOMMENT
+    if (z[3] & 2) p += 2;                      // FHCRC
+    int len = stbi_zlib_decode_noheader_buffer(feed, CAP - 1, (char *)p, z + n - 8 - p);
+    if (len < 0) return snprintf(err, sizeof err, "Bad gzip (%d bytes)", n), -1;
+    feed[len] = 0;
+    ESP_LOGI("rss", "feed: %d bytes gzipped, %d plain", n, len);
+    return len;
 }
 
 static void net(void *arg)
@@ -324,13 +335,12 @@ static void net(void *arg)
         join_ms = (esp_timer_get_time() - t0) / 1000;
         stage = 1;
         c = client();
-        int n = get(c, feed_url, feed, CAP);
-        esp_http_client_cleanup(c);
+        int n = get_feed(c);
         feed_ms = (esp_timer_get_time() - t0) / 1000 - join_ms;
         ESP_LOGI("rss", "join %d ms, feed %d bytes in %d ms", join_ms, n, feed_ms);
         if (n >= 0 && (parse(), !nposts)) snprintf(err, sizeof err, "No posts in the feed (%d bytes).", n);
         stage = n < 0 || !nposts ? 3 : 2;
-        c = stage == 2 ? client() : NULL;
+        if (stage == 3) esp_http_client_cleanup(c), c = NULL; // else the images come over the same connection
     }
     while (c && !net_stop) {
         int i = -1, cp = cur_post;
