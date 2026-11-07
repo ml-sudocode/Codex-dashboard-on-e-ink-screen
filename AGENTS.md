@@ -12,11 +12,10 @@
   - `app-blocks`: `main/app_blocks.c`
   - `app-rocks`: `main/app_rocks.c`
   - `app-radar`: `main/app_radar.c`
-  - `app-hackaday`: `main/app_hackaday.c`, `main/app_news.c`
+  - `app-hackaday`: `main/app_hackaday.c`, `main/app_news.c` (Gallery merged into Hackaday)
   - `app-badge`: `main/app_badge.c`
   - `app-settings`: `main/app_settings.c`
   - `app-weather`: `main/app_weather.c`
-  - `app-gallery`: `main/app_gallery.c`
 
 ## Rules for app agents
 - Work in your own git worktree on your own branch (`~/Documents/hackaday26/badge_os-<app>`, branch `app/<app>`).

@@ -88,4 +88,3 @@ void app_badge(void);
 void app_settings(void);
 void app_weather(void);
 void app_news(void);
-void app_gallery(void);

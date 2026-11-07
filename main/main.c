@@ -1176,14 +1176,6 @@ static void icon_news(int x, int y) // a page of headlines
     for (int k = 0; k < 4; k++) box(x + 44, y + 68 + k * 18, k == 3 ? 56 : 88, 6, true);
 }
 
-static void icon_gallery(int x, int y) // a framed picture: sun and mountains
-{
-    icon_base(x, y);
-    outline(x + 24, y + 36, 128, 104, 8);
-    box(x + 104, y + 52, 20, 20, false);
-    for (int r = 0; r < 48; r++) box(x + 76 - r, y + 84 + r, 2 * r + 1, 1, false), box(x + 112 - r / 2, y + 108 + r / 2, r + 1, 1, false);
-}
-
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
 {
     icon_base(x, y);
@@ -1216,7 +1208,6 @@ static const app_t apps[] = {
     {"Source", icon_source, app_source},
     {"Hackaday", icon_feed, app_hackaday},
     {"News", icon_news, app_news},
-    {"Gallery", icon_gallery, app_gallery},
     {"Weather", icon_weather, app_weather},
     {"Settings", icon_settings, app_settings},
 };
