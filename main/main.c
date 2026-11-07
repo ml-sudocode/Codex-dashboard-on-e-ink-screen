@@ -991,6 +991,19 @@ static void icon_rocks(int x, int y) // a little ship among rocks
     box(x + 36, y + 124, 20, 20, false);
 }
 
+static void icon_source(int x, int y) // three QR finder squares and some modules
+{
+    icon_base(x, y);
+    static const int f[][2] = {{28, 28}, {100, 28}, {28, 100}};
+    for (int i = 0; i < 3; i++) {
+        box(x + f[i][0], y + f[i][1], 48, 48, false);
+        box(x + f[i][0] + 8, y + f[i][1] + 8, 32, 32, true);
+        box(x + f[i][0] + 16, y + f[i][1] + 16, 16, 16, false);
+    }
+    static const int m[][2] = {{100, 100}, {124, 100}, {112, 112}, {136, 124}, {100, 136}, {124, 136}};
+    for (int i = 0; i < 6; i++) box(x + m[i][0], y + m[i][1], 12, 12, false);
+}
+
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
 {
     icon_base(x, y);
@@ -1018,7 +1031,8 @@ static const app_t apps[] = {
     {"SpaceInv", icon_aliens, app_aliens},
     {"Tetris", icon_blocks, app_blocks},
     {"Asteroids", icon_rocks, app_rocks},
-    {"Radar", icon_radar, app_radar}, // 8 icons fill the home screen: a 9th app needs a second page
+    {"Radar", icon_radar, app_radar},
+    {"Source", icon_source, app_source},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
@@ -1027,13 +1041,19 @@ static void draw_home(int sel)
     char ver[48];
     snprintf(ver, sizeof ver, "badge os v%s", esp_app_get_description()->version);
     memset(fb, 0, sizeof fb);
-    for (int i = 0; i < NAPPS; i++) {
-        int x = X0 + i % 4 * PITCH, y = Y0 + i / 4 * ROW;
+    int page = sel / 8, pages = (NAPPS + 7) / 8; // 8 icons a page; moving past the last one turns the page
+    for (int i = page * 8; i < MIN(NAPPS, page * 8 + 8); i++) {
+        int x = X0 + i % 4 * PITCH, y = Y0 + i % 8 / 4 * ROW;
         apps[i].icon(x, y);
         text(x + ICON / 2 - (int)strlen(apps[i].name) * 12, y + ICON + 24, 3, apps[i].name, true);
         if (i == sel) outline(x - 16, y - 16, ICON + 32, ICON + 32, 8);
     }
     text(W - (int)strlen(ver) * 24 - 24, H - 48, 3, ver, true);
+    for (int p = 0; pages > 1 && p < pages; p++) { // page dots, bottom centre: the current one filled
+        int x = W / 2 - pages * 16 + p * 32;
+        if (p == page) box(x, H - 44, 16, 16, true);
+        else outline(x, H - 44, 16, 16, 3);
+    }
     draw_battery(W - 24 - 64 - 4 * 24, 24, battery_pct());
 }
 

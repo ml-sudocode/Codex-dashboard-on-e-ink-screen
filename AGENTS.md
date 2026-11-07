@@ -7,7 +7,7 @@
   - `app-pong`: `main/app_pong.c`, `main/link.h`, `tools/test_link.c`
   - `app-ota`: `main/app_ota.c`, `.github/workflows/`
   - `app-snake`: `main/app_snake.c`
-  - `idfport` (OS maintainer): `main/app_life.c` (Game of Life)
+  - `idfport` (OS maintainer): `main/app_life.c` (Game of Life), `main/app_source.c` (QR code to this repo)
   - `app-aliens`: `main/app_aliens.c`
   - `app-blocks`: `main/app_blocks.c`
   - `app-rocks`: `main/app_rocks.c`
