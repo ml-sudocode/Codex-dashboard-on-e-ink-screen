@@ -8,6 +8,9 @@
   - `app-ota`: `main/app_ota.c`, `.github/workflows/`
   - `app-snake`: `main/app_snake.c`
   - `idfport` (OS maintainer): `main/app_life.c` (Game of Life)
+  - `app-aliens`: `main/app_aliens.c`
+  - `app-blocks`: `main/app_blocks.c`
+  - `app-rocks`: `main/app_rocks.c`
 
 ## Rules for app agents
 - Work in your own git worktree on your own branch (`~/Documents/hackaday26/badge_os-<app>`, branch `app/<app>`).

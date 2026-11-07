@@ -42,3 +42,6 @@ void app_pong(void);
 void app_ota(void);   // not on the home screen: the Update app offers it next to the wired update
 void app_snake(void);
 void app_life(void);
+void app_aliens(void);
+void app_blocks(void);
+void app_rocks(void);

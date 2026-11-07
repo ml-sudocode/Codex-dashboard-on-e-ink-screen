@@ -786,6 +786,32 @@ static void icon_life(int x, int y) // a glider
     for (int i = 0; i < 5; i++) box(x + 28 + cells[i][0] * 40 + 2, y + 28 + cells[i][1] * 40 + 2, 36, 36, false);
 }
 
+static void icon_aliens(int x, int y) // a flying saucer over a gun
+{
+    icon_base(x, y);
+    box(x + 72, y + 40, 32, 16, false);  // dome
+    box(x + 40, y + 56, 96, 16, false);  // saucer
+    box(x + 56, y + 72, 64, 8, false);
+    box(x + 84, y + 100, 8, 24, false);  // shot
+    box(x + 64, y + 136, 48, 12, false); // gun
+    box(x + 82, y + 128, 12, 8, false);
+}
+
+static void icon_blocks(int x, int y) // a falling L over a stacked floor
+{
+    icon_base(x, y);
+    static const int cells[][2] = {{2, 0}, {2, 1}, {2, 2}, {3, 2}, {0, 4}, {1, 4}, {3, 4}, {4, 4}, {0, 5}, {1, 5}, {2, 5}, {4, 5}};
+    for (int i = 0; i < 12; i++) box(x + 28 + cells[i][0] * 24 + 2, y + 16 + cells[i][1] * 24 + 2, 20, 20, false);
+}
+
+static void icon_rocks(int x, int y) // a little ship among rocks
+{
+    icon_base(x, y);
+    for (int r = 0; r < 24; r++) box(x + 88 - r / 2, y + 76 + r, r + 1, 1, false); // ship, nose up
+    outline(x + 28, y + 28, 40, 36, 6), outline(x + 116, y + 40, 32, 28, 6), outline(x + 112, y + 120, 44, 36, 6);
+    box(x + 36, y + 124, 20, 20, false);
+}
+
 typedef struct {
     const char *name;
     void (*icon)(int x, int y);
@@ -797,6 +823,9 @@ static const app_t apps[] = {
     {"Pong", icon_pong, app_pong},
     {"Snake", icon_snake, app_snake},
     {"Life", icon_life, app_life},
+    {"Aliens", icon_aliens, app_aliens},
+    {"Blocks", icon_blocks, app_blocks},
+    {"Rocks", icon_rocks, app_rocks},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
