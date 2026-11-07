@@ -17,7 +17,13 @@ static node_t nd[NODES];   // [0] = me at (0, 0); positions in metres, kept betw
 static int nn;
 static float dist[NODES][NODES]; // metres, < 0 unknown
 
-static void id_of(const uint8_t *mac, char *s) { sprintf(s, "%02X%02X", mac[4], mac[5]); }
+// What a badge is called on screen: its username if known (mine from Settings), else its 4-hex id. The MAC stays the key.
+static void id_of(const uint8_t *mac, char *s)
+{
+    uint8_t me[6];
+    ranging_me(me);
+    if (memcmp(mac, me, 6) ? !ranging_name(mac, s) : cfg_get("name", s, 13) <= 0) sprintf(s, "%02X%02X", mac[4], mac[5]);
+}
 
 static int find(const node_t *v, int n, const uint8_t *mac)
 {
@@ -131,15 +137,16 @@ void app_radar(void)
             for (int j = 0; j < nn; j++) dist[i][j] = cnt[i][j] ? sum[i][j] / cnt[i][j] : -1;
 
         memset(fb, 0, sizeof fb);
-        char s[32], id[8];
+        char s[32], id[13];
         id_of(me, id);
         snprintf(s, sizeof s, "me %s", id);
-        text(24, TOP + 16, 4, s, true);
+        text(24, TOP + 16, 3, s, true);
         for (int i = 1; i < nn; i++) {
             id_of(nd[i].mac, id);
-            if (cm[i] < 0) snprintf(s, sizeof s, "%s   ...", id);
-            else snprintf(s, sizeof s, "%s %4.1f m", id, cm[i] / 100.0f);
-            text(24, TOP + 40 + 56 * i, 4, s, true);
+            text(24, TOP + 8 + 64 * i, 3, id, true); // name up to 12 chars, distance on the line below
+            if (cm[i] < 0) snprintf(s, sizeof s, "...");
+            else snprintf(s, sizeof s, "%4.1f m", cm[i] / 100.0f);
+            text(72, TOP + 36 + 64 * i, 3, s, true);
         }
         if (nn == 1) text(24, TOP + 96, 3, "Looking...", true);
 
