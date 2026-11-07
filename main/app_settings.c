@@ -24,7 +24,7 @@ static const char page[] =
     "<title>Badge settings</title><style>"
     "body{font:16px system-ui,sans-serif;margin:0 auto;max-width:34em;padding:1em}"
     "fieldset{border:1px solid #ccc;border-radius:8px;margin:0 0 1em}"
-    "input,textarea,button{font:inherit;box-sizing:border-box;width:100%;padding:.4em;margin:.2em 0 .6em}"
+    "input,textarea,button,select{font:inherit;box-sizing:border-box;width:100%;padding:.4em;margin:.2em 0 .6em}"
     "input[type=radio],input[type=checkbox]{width:auto}canvas{width:100%;border:1px solid #ccc}"
     "button{background:#900;color:#fff;border:0;border-radius:8px;padding:.7em}small{color:#666}"
     "</style><h2>Badge settings</h2>"
@@ -46,9 +46,10 @@ static const char page[] =
     "<div id=wnd hidden>Paste a Google Maps link<input id=link placeholder='https://www.google.com/maps/@40.4,-3.7,12z'>"
     "Latitude<input id=wx_lat inputmode=decimal>Longitude<input id=wx_lon inputmode=decimal>"
     "<small>Or in Google Maps long-press a place and copy the coordinates (short maps.app.goo.gl links do not "
-    "work: the badge has no internet to follow them).</small></div></fieldset>"
+    "work: the badge has no internet to follow them).</small></div>"
+    "Temperature<select id=wx_unit><option value=''>Celsius<option value=F>Fahrenheit</select></fieldset>"
     "<button id=save>Save and restart the badge</button><p id=st></p><script>"
-    "var K=['name','ssid','pass','badge_text','wx_city','wx_lat','wx_lon'],$=function(i){return document.getElementById(i)},"
+    "var K=['name','ssid','pass','badge_text','wx_city','wx_lat','wx_lon','wx_unit'],$=function(i){return document.getElementById(i)},"
     "img=null,gray=null,hadImg=false;"
     "fetch('/cfg').then(function(r){return r.json()}).then(function(c){K.forEach(function(k){$(k).value=c[k]||''});"
     "hadImg=c.img;if(!c.wx_city&&c.wx_lat)$('wn').checked=true;if(c.img){$('mi').checked=true;$('ist').textContent='A picture is saved; choose a file to replace it.'}mode()});"
@@ -99,11 +100,11 @@ static esp_err_t get_page(httpd_req_t *r) { return httpd_resp_send(r, page, size
 
 static esp_err_t get_cfg(httpd_req_t *r)
 {
-    static const char *keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon"};
+    static const char *keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon", "wx_unit"};
     char *out = heap_caps_malloc(16 * 1024 + IMG_BYTES, MALLOC_CAP_SPIRAM), *p = out, v[1024];
     if (!out) return httpd_resp_send_500(r);
     *p++ = '{';
-    for (int i = 0; i < 7; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
+    for (int i = 0; i < 8; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
     p += sprintf(p, "\"img\":%s}", cfg_get_image((uint8_t *)out + 16 * 1024) ? "true" : "false");
     httpd_resp_set_type(r, "application/json");
     esp_err_t e = httpd_resp_send(r, out, p - out);
@@ -142,9 +143,9 @@ static esp_err_t post_save(httpd_req_t *r)
     if (r->content_len <= 0 || r->content_len >= sizeof b || recv_all(r, b, r->content_len) < 0)
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Too long.");
     b[r->content_len] = 0;
-    const char *kv[16];
+    const char *kv[32];
     int n = 0;
-    for (char *p = b; p < b + r->content_len && n < 16; p += strlen(p) + 1) kv[n++] = p;
+    for (char *p = b; p < b + r->content_len && n < 32; p += strlen(p) + 1) kv[n++] = p;
     const char *bad = n % 2 ? "Bad request." : NULL;
     for (int i = 0; i + 1 < n && !bad; i += 2) {
         const char *k = kv[i], *v = kv[i + 1];
@@ -153,10 +154,11 @@ static esp_err_t post_save(httpd_req_t *r)
         else if (!strcmp(k, "ssid") && l > 32) bad = "SSID: up to 32 characters.";
         else if (!strcmp(k, "pass") && l && (l < 8 || l > 63)) bad = "Wi-Fi password: 8 to 63 characters, or empty.";
         else if (!strcmp(k, "wx_city") && (l > 64 || !printable(v))) bad = "Place name: up to 64 plain characters.";
+        else if (!strcmp(k, "wx_unit") && strcmp(v, "") && strcmp(v, "C") && strcmp(v, "F")) bad = "Unit: C or F.";
         else if (!strcmp(k, "wx_lat") && !coord(v, 90)) bad = "Latitude: a number from -90 to 90.";
         else if (!strcmp(k, "wx_lon") && !coord(v, 180)) bad = "Longitude: a number from -180 to 180.";
         else if (strcmp(k, "name") && strcmp(k, "ssid") && strcmp(k, "pass") && strcmp(k, "badge_text") &&
-                 strcmp(k, "wx_city") && strcmp(k, "wx_lat") && strcmp(k, "wx_lon")) bad = "Unknown setting.";
+                 strcmp(k, "wx_city") && strcmp(k, "wx_unit") && strcmp(k, "wx_lat") && strcmp(k, "wx_lon")) bad = "Unknown setting.";
     }
     if (bad) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, bad);
     for (int i = 0; i + 1 < n; i += 2) {
@@ -164,6 +166,7 @@ static esp_err_t post_save(httpd_req_t *r)
         if (!strcmp(kv[i], "badge_text")) cfg_set_image(NULL); // text replaces the picture
         if (!strcmp(kv[i], "wx_city")) cfg_set("wx_lat", NULL), cfg_set("wx_lon", NULL); // a place name replaces
         if (!strcmp(kv[i], "wx_lat")) cfg_set("wx_city", NULL);                         // coordinates, and back
+        if (!strcmp(kv[i], "wx_city") || !strcmp(kv[i], "wx_lat")) cfg_set("wx_place", NULL); // Weather looks it up again
     }
     ESP_LOGI(TAG, "saved %d settings", n / 2);
     httpd_resp_sendstr(r, "Saved. The badge restarts now.");
