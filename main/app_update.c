@@ -85,7 +85,7 @@ static void update_task(void *arg)
 static void message(const char *s)
 {
     memset(fb, 0, sizeof fb);
-    text(48, 48, 6, "Wired update", true);
+    text(48, TOP + 24, 6, "Wired update", true);
     text(48, 300, 6, s, true);
     ui_frame(3);
     ui_close();
@@ -103,7 +103,7 @@ static void wired(void)
         xTaskCreate(update_task, "update", 8192, NULL, 4, NULL);
 
         memset(fb, 0, sizeof fb);
-        text(48, 48, 6, "Wired update", true);
+        text(48, TOP + 24, 6, "Wired update", true);
         text(48, 200, 3, "Connect another badge with a", true);
         text(48, 240, 3, "USB-C cable. Both on battery.", true);
         text(48, 320, 3, "Badge on stock MicroPython:", true);
@@ -125,11 +125,10 @@ static void wired(void)
             char s[8];
             snprintf(s, sizeof s, "%d%%", p);
             memset(fb, 0, sizeof fb);
-            // ui_frame refreshes only the changed rows, top-down: the bar and the number sit at the top, alone in
-            // their rows, so a step costs ~1/5 of a full frame. The static text below is never redrawn.
-            outline(48, 48, 720, 96, 6);
-            box(60, 60, 696 * p / 100, 72, true);
-            text(800, 80, 4, s, true);
+            // Only changed pixels move: the bar only grows, so just the number leaves a light ghost as it changes.
+            outline(48, TOP + 24, 720, 96, 6);
+            box(60, TOP + 36, 696 * p / 100, 72, true);
+            text(800, TOP + 56, 4, s, true);
             text(48, 300, 4, "Updating connected badge", true);
             text(48, 560, 3, "Wired update", true);
             ui_frame(pulls);
@@ -153,7 +152,7 @@ void app_update(void)
     static const char *name[2] = {"Online update", "Flash another badge"};
     for (int sel = 0, pulls = 3;;) {
         memset(fb, 0, sizeof fb);
-        text(48, 48, 6, "Update", true);
+        text(48, TOP + 24, 6, "Update", true);
         for (int i = 0; i < 2; i++) {
             text(112, 240 + i * 200, 5, name[i], true);
             if (i == sel) outline(80, 208 + i * 200, 800, 104, 8);
