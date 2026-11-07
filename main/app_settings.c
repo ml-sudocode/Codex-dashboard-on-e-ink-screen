@@ -83,6 +83,7 @@ static const char page[] =
     "</script>";
 
 static volatile bool saved;
+static const char *const keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon", "wx_unit"};
 
 static void json_str(char **p, const char *key, const char *v) // "key":"v", (v JSON-escaped)
 {
@@ -100,11 +101,10 @@ static esp_err_t get_page(httpd_req_t *r) { return httpd_resp_send(r, page, size
 
 static esp_err_t get_cfg(httpd_req_t *r)
 {
-    static const char *keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon", "wx_unit"};
     char *out = heap_caps_malloc(16 * 1024 + IMG_BYTES, MALLOC_CAP_SPIRAM), *p = out, v[1024];
     if (!out) return httpd_resp_send_500(r);
     *p++ = '{';
-    for (int i = 0; i < 8; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
+    for (int i = 0; i < sizeof keys / sizeof *keys; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
     p += sprintf(p, "\"img\":%s}", cfg_get_image((uint8_t *)out + 16 * 1024) ? "true" : "false");
     httpd_resp_set_type(r, "application/json");
     esp_err_t e = httpd_resp_send(r, out, p - out);
@@ -127,6 +127,13 @@ static bool printable(const char *s)
     for (; *s; s++)
         if (*s < 0x20 || *s > 0x7e) return false;
     return true;
+}
+
+static bool known(const char *k)
+{
+    for (int i = 0; i < sizeof keys / sizeof *keys; i++)
+        if (!strcmp(k, keys[i])) return true;
+    return false;
 }
 
 static bool coord(const char *s, double max) // empty, or a number in -max..max
@@ -157,8 +164,7 @@ static esp_err_t post_save(httpd_req_t *r)
         else if (!strcmp(k, "wx_unit") && strcmp(v, "") && strcmp(v, "C") && strcmp(v, "F")) bad = "Unit: C or F.";
         else if (!strcmp(k, "wx_lat") && !coord(v, 90)) bad = "Latitude: a number from -90 to 90.";
         else if (!strcmp(k, "wx_lon") && !coord(v, 180)) bad = "Longitude: a number from -180 to 180.";
-        else if (strcmp(k, "name") && strcmp(k, "ssid") && strcmp(k, "pass") && strcmp(k, "badge_text") &&
-                 strcmp(k, "wx_city") && strcmp(k, "wx_unit") && strcmp(k, "wx_lat") && strcmp(k, "wx_lon")) bad = "Unknown setting.";
+        else if (!known(k)) bad = "Unknown setting.";
     }
     if (bad) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, bad);
     for (int i = 0; i + 1 < n; i += 2) {

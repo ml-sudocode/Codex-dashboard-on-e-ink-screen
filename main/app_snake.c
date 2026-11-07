@@ -1,9 +1,9 @@
 // Snake: 20 x 13 grid of 48 px cells, a move every MOVE_MS, walls wrap around. Nonstop: after the snake bites
 // itself its length shows for 3 s, then a new game starts by itself. MENU - turns clockwise, MENU + counter-
 // clockwise; presses queue, one turn per move. The AS5600 knob add-on steers too: an eighth of a turn either way
-// is one turn. A reboot goes home.
-// The game runs on its own clock; a second task shows the latest board whenever the panel is free (a frame costs
-// ~949 ms x lowest changed row / 672), so the game speed does not depend on the refresh speed.
+// is one turn.
+// The game runs on its own clock; a second task shows the latest board whenever the panel is free, so the game speed
+// does not depend on the refresh speed.
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -81,7 +81,7 @@ void app_snake(void)
         over = 0;
         xSemaphoreTake(panel, portMAX_DELAY);
         draw();
-        ui_frame(3);
+        ui_frame(1);
         xSemaphoreGive(panel);
         btn_flush();
         TickType_t t = xTaskGetTickCount();

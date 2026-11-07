@@ -2,8 +2,8 @@
 
 Everything here was measured on a badge or read from the badge's KiCad schematic
 (https://github.com/Hack-a-Day/2026-Billboard_Badge, `hardware/billboard_pcb/`, netlist exported with kicad-cli),
-unless marked otherwise. Sources: the idf_port repo's NOTES.md, `~/Documents/hackaday26/panel_lab/FINDINGS.md`
-and its experiment results, and the badge team's `documentation/itc97-driver-reference.pdf` ("badge team doc").
+unless marked otherwise. Other sources: the supercon26-badge-idf repo's NOTES.md and the badge team's
+`documentation/itc97-driver-reference.pdf` ("badge team doc").
 
 ## At a glance
 | Part | What |
@@ -32,14 +32,14 @@ and its experiment results, and the badge team's `documentation/itc97-driver-ref
 | 12 | EPD_BUSY1 | left CoG (master) BUSY, low = busy |
 | 13 | EPD_CS1 | left CoG chip select |
 | 14 | BAT_SENS | supply sense: 10k/10k divider, reads VIN / 2 (ADC2 channel 3) |
-| 15 | Button3 | printed **MENU -** (top right) |
-| 16 | Button4 | printed **B** (bottom right) |
+| 15 | Button3 | printed **MENU -** (right corner, upper) |
+| 16 | Button4 | printed **B** (right corner, lower) |
 | 17 / 18 | SAO_SDA / SAO_SCL | I2C to all three SAO ports, 5.1k pull-ups |
 | 19 / 20 | USB D- / D+ | USB-C data (native USB: USB-Serial-JTAG console or USB OTG host) |
 | 21 | EPD_SCL | panel SPI clock |
 | 38 | WS2812_data | LED bar (8 LEDs, chained) |
-| 39 | Button1 | printed **A** (bottom left) |
-| 40 | Button2 | printed **MENU +** (top left) |
+| 39 | Button1 | printed **A** (left corner, lower) |
+| 40 | Button2 | printed **MENU +** (left corner, upper) |
 | 41 | TP9 | test pad |
 | 43 / 44 | TXD0 / RXD0 | UART0 test pads TP3 / TP4 |
 | 47 | EPD_SDA | panel SPI data. Bidirectional (3-wire): the CoG's OTP is read back on it |
@@ -49,7 +49,7 @@ and its experiment results, and the badge team's `documentation/itc97-driver-ref
 GPIO45 is listed as MISO in the stock driver but is not connected; it is a strapping pin, leave it alone.
 
 ## Buttons
-- Physical layout, a 2x2 block: **MENU +** top left, **MENU -** top right, **A** bottom left, **B** bottom right.
+- Physical layout: two in each top corner, **MENU +** above **A** on the left, **MENU -** above **B** on the right.
 - Active low, no external pull-ups on the user buttons: enable the internal pull-ups. Polling every 20 ms with
   edge detection is enough debouncing.
 - The stock MicroPython names are swapped against the silkscreen ("plus/minus mislabeled on the silkscreen"):
@@ -68,8 +68,8 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
   `(red << 1) | bw`: 0 white, 1 black, 2 red, 3 unused (both bits set: nothing drives it in the stock tables).
 - On the wire: per row 60 bytes to the left CoG and 60 to the right, every byte bit-reversed (this "B1" panel;
   the older "084" variant is not reversed). badge os keeps planes MSB-left and reverses while sending.
-- SPI mode 0, 8 MHz here (PDi documents 5 MHz on an old page and 20 MHz on a newer one). One ESP32-S3 SPI
-  transaction carries at most 32 KB: send in pieces with CS held low.
+- SPI mode 0, 20 MHz (PDi's maximum for this CoG family). One ESP32-S3 SPI transaction carries at most 32 KB: send
+  in pieces with CS held low.
 
 ### Refresh modes (measured)
 | Mode | Cost | Looks | Use for |
@@ -78,7 +78,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 | **Fast full**: badge team table `lutb_base` at 0xB0, 3 pulls | ~3.5 s with the quick open | the whole panel flashes; black is grey-brown to maroon; no red | a clean-ish black/white screen |
 | **Fast frame** in an open session: planes + 1 pull | 1.07 s (946 ms pull + ~120 ms transfer) | whole panel flashes each frame; ghosting builds up | badge os `ui_wipe` (one black, one white frame) |
 | **Refresh window** (DRFW 0x90 y range) | ~490 ms pull for a y window | copies rows 0..y1 down the panel | never: keep DRFW `00 3B 00 A9` |
-| **Calm partial** (panel_lab `epd_partial`): film state in 0x11, new frame in 0x10, 20-frame transition table | ~0.48 s per frame, however much changed | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
+| **Calm partial** (`epd_partial`): film state in 0x11, new frame in 0x10, 20-frame transition table | ~0.48 s per frame, however much changed | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
 
 ### Timing details
 - A pull (`0x15 3C`) plays the latched waveform; its length follows the table: frames x ~23.7 ms. The badge team
@@ -89,11 +89,10 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
   DUW (0x13) + RAM_RW (0x12) window writes work, so a small change costs a few bytes of SPI instead of 4 x 40 KB.
 - Session open (reset, `0x70`, planes, register sequence, `0xB0`, DC-DC soft start): 2443 ms with the PDi GU_large
   waits, **348 ms with the quick waits** (reset 2/4/20 ms, `0x05 7D` 50 ms, `0x05 00` 1 ms, load strobes 2/10 ms,
-  `0xB0` 10 ms after the last strobe). badge os uses the quick waits for fast sessions only; the slow OTP refresh
-  keeps the old waits (untested with the quick ones). Close (DC-DC soft shutdown): ~0.2 s.
+  `0xB0` 10 ms after the last strobe). badge os only uses the quick waits. Close (DC-DC soft shutdown): ~0.2 s.
 - `0xB0` has one window: after the last `0xA7 00` load strobe, before the DC-DC soft start. Rewriting it inside an
   open session drops the panel back to its own 33 s waveform.
-- Full plane transfer: 80 KB per plane, ~80-150 ms; all 4 planes (2 per CoG) row by row: 301 ms at 8 MHz.
+- Full plane transfer: 80 KB per plane; all 4 planes (2 per CoG) row by row took 301 ms at 8 MHz.
 - `0x45` after `0x44 06` is the temperature input, `0x50 + 2 x degrees C` (0x82 = 25 C, 0x84 = 26 C). From 26 to
   50 C our fast frames stay at 23.7 ms; at 15 C they are 26.3 ms. It is not a speed lever. Values below 0x80 give
   the stock waveform 45.7 s.
@@ -117,8 +116,8 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - Do not drive the panel bus pins while the panel supply (GPIO48 / Q2) is off: it backfeeds the CoG through its
   ESD diodes, and the badge team broke a panel that way. All firmware so far leaves GPIO48 alone (panel on).
 - Only GND / VDH / VDL / VDHR levels from the known tables; no level held for long; balanced shakes.
-- The badge team starts a fresh session every 20 fast frames (reason not documented; with the quick open that
-  costs ~0.85 s). Whether longer sessions are fine is being tested in panel_lab.
+- Partial updates open a fresh session every 60 frames (sessions of 60 are proven on the badge; the badge team
+  used 20 for its fast frames, reason not documented).
 
 ## LEDs
 - 8x WS2812 on GPIO38, chained, powered from 3V3 (keep brightness low, ~12/255 is plenty). GRB order, 800 kHz:
@@ -146,11 +145,15 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
   Open with DTR high and RTS low, then drop DTR (pyserial: `s.dtr = True; s.rts = False; s.open(); s.dtr = False`).
 
 ## Radio
+- Ranging runs on every screen: Wi-Fi in APSTA mode on channel 1, a hidden SoftAP as the FTM responder, ESP-NOW
+  beacons about once a second, power save off. FTM distances read right with no offset on our badges.
 - Pong uses ESP-NOW on channel 1 with Wi-Fi in station mode and power save off (modem sleep drops packets).
   ~250-byte packets, broadcast for pairing, unicast after.
+- Apps that join a network (Online update, Hackaday, News, Weather) stop ranging; the home screen restarts it.
 
 ## Flash
 - 8 MB. badge os: bootloader at 0x0, partition table at 0x8000, NVS at 0x9000 (24 KB), otadata at 0xF000,
   two 3 MB app slots (ota_0 at 0x20000, ota_1 at 0x320000) for online updates with rollback: a new version that
-  does not reach the home screen once is rolled back at the next boot.
+  does not reach the home screen once is rolled back at the next boot. Coredump at 0x620000 (64 KB), the Badge
+  app's picture at 0x630000 (128 KB, used by address: badges updated over the air keep their old partition table).
 - The stock MicroPython firmware kept a LittleFS filesystem at 0x310000; it survives flashing a smaller app.

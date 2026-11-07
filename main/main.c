@@ -1,5 +1,5 @@
-// badge os: boots to the home screen, the only way back to it is a reboot (or an app that returns).
-// Panel driver, drawing, buttons and the home screen live here; the apps are app_*.c behind badge.h.
+// badge os: panel driver, drawing, buttons, Wi-Fi, ranging, settings and the home screen; the apps are app_*.c
+// behind badge.h.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +34,6 @@ static const char *TAG = "os";
 
 // ---- Panel: Pervasive Displays 9.7" black/white/red, 960x672, two CoGs.
 // The left CoG (master) drives columns 0-479, the right CoG (slave) columns 480-959.
-#define IMG (2 * PLANE)   // an image is the black plane, then the red plane
 #define HALF (PLANE / 2)  // what one CoG gets of one plane
 #define REVERSE_BITS 1    // stock driver: reverse unless /data/hwconf display_pn == "84"
 
@@ -75,8 +74,7 @@ static void cmd(int cog, uint8_t index, const uint8_t *data, size_t n)
     cmd(cog, index, (const uint8_t[]){__VA_ARGS__}, sizeof((const uint8_t[]){__VA_ARGS__}))
 
 // Each CoG pulls its BUSY low while it works. Logs how long each side stayed busy (-1: timeout).
-// Returns false on timeout.
-static bool wait_ready(const char *what, int timeout_ms)
+static void wait_ready(const char *what, int timeout_ms)
 {
     int64_t t0 = esp_timer_get_time(), t = 0;
     int l = -1, r = -1;
@@ -87,7 +85,6 @@ static bool wait_ready(const char *what, int timeout_ms)
         if (l < 0 || r < 0) ms(10);
     }
     ESP_LOGI(TAG, "%s: BUSY left %d ms, right %d ms", what, l, r);
-    return l >= 0 && r >= 0;
 }
 
 static uint8_t rev(uint8_t b)
@@ -113,10 +110,9 @@ static void send_rows(int cog, uint8_t index, const uint8_t *plane, int y0, int 
     cmd(cog, index, buf, n);
 }
 
-// A panel session: epd_open (reset, frame data, register sequence, DC-DC up), any number of
-// epd_pull, epd_close. Same sequence as PDi EPD_Driver_GU_large and the stock epd.py, plus what the
-// badge team documented for this B1 CoG (2026-Billboard_Badge/documentation/itc97-driver-reference.pdf):
-// the 0x70 booster setting and the 0xB0 short waveform.
+// A panel session: epd_open (reset, frame data, register sequence, DC-DC up), pulls, epd_close. Same sequence as
+// PDi EPD_Driver_GU_large and the stock epd.py, plus what the badge team documented for this B1 CoG
+// (2026-Billboard_Badge/documentation/itc97-driver-reference.pdf): the 0x70 booster setting and the 0xB0 waveform.
 
 // Short waveform for the B1 CoG: data/rendered_luts.py "lutb_base" from the badge team.
 // 5 tables (paper, ink, red, unused, VCOM) x 10 groups of {level, on, off, ph2, on, off, ph2, repeat};
@@ -180,8 +176,7 @@ static const uint8_t lutb[400] = {
     0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
 };
 
-// PDi Wide_Large's waits for this CoG family (panel_lab experiment 02: session open 348 ms instead of 2443 ms,
-// 0xB0 still latches). badge os never runs the slow OTP refresh (~35 s), so only these waits are here.
+// PDi Wide_Large's waits for this CoG family: the session opens in 348 ms and 0xB0 still latches.
 static void epd_reset(void)
 {
     gpio_set_level(RST, 1);
@@ -196,14 +191,14 @@ static void epd_reset(void)
     CMD(BOTH, 0x70, 0x71, 0x36); // B1 booster setting. Without it a refresh draws ~2 A (badge team errata 9)
 }
 
-// Frame into CoG RAM. red NULL = no red; with_red false leaves the red RAM as it is (saves 80 ms).
-static void epd_load(const uint8_t *black, const uint8_t *red, bool with_red)
+// Frame into CoG RAM: black into 0x10, 0x11 (red) all white. black NULL = all white.
+static void epd_load(const uint8_t *black)
 {
     CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW: 60 bytes x 672 lines
     CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);             // DRFW: whole panel
     for (int cog = LEFT; cog <= RIGHT; cog++) {
         send_rows(cog, 0x10, black, 0, H - 1);
-        if (with_red) send_rows(cog, 0x11, red, 0, H - 1);
+        send_rows(cog, 0x11, NULL, 0, H - 1);
     }
 }
 
@@ -239,12 +234,11 @@ static void dcdc_on(void)
     wait_ready("dc-dc on", 10000); // never trigger into a booster that is still ramping
 }
 
-// Loads the short waveform instead of the panel's own 33 s one (black/white only, red goes pale).
-static void epd_open(const uint8_t *black, const uint8_t *red)
+// After reset (and the frame data for a full session): the register sequence, a waveform table into 0xB0 instead
+// of the panel's own 33 s one, DC-DC up.
+static void epd_start(const uint8_t *lut)
 {
     int hi = 2, lo = 10; // load strobe waits
-    epd_reset();
-    epd_load(black, red, true);
     CMD(BOTH, 0x05, 0x7D);
     ms(50);
     CMD(BOTH, 0x05, 0x00);
@@ -273,19 +267,25 @@ static void epd_open(const uint8_t *black, const uint8_t *red)
     CMD(BOTH, 0x60, 0x25); // TCON
     CMD(LEFT, 0x61, 0x01); // STV_DIR, master only
     CMD(BOTH, 0x02, 0x00); // VCOM
-    cmd(BOTH, 0xB0, lutb, sizeof lutb); // one chance per session: rewriting it re-latches the slow one
+    cmd(BOTH, 0xB0, lut, 400); // one chance per session: rewriting it re-latches the slow one
     dcdc_on();
 }
 
-// Run the latched waveform n times on what is in RAM. Returns ms spent.
-static int epd_pull(int n, int timeout_ms)
+// A full session on the badge team's black/white table.
+static void epd_open(const uint8_t *black)
+{
+    epd_reset();
+    epd_load(black);
+    epd_start(lutb);
+}
+
+// Run the latched waveform once on what is in RAM. Returns ms spent.
+static int epd_pull(int timeout_ms)
 {
     int64_t t0 = esp_timer_get_time();
-    while (n--) {
-        CMD(BOTH, 0x15, 0x3C);
-        ms(5);
-        wait_ready("pull", timeout_ms);
-    }
+    CMD(BOTH, 0x15, 0x3C);
+    ms(5);
+    wait_ready("pull", timeout_ms);
     return (esp_timer_get_time() - t0) / 1000;
 }
 
@@ -318,16 +318,12 @@ static void epd_init(void)
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev, &spi));
 }
 
-
-// ==== panel_lab: calm partial updates for the 9.7" B1 panel (mechanism proven in experiment 05) ====
-// From panel_lab/driver/epd_partial.c (INTEGRATION.md, FINDINGS.md experiments 05-10); 1185 calls in 10 min on the badge.
-//
-// part_shown must match the film before the first epd_partial: badge os gets there with ui_wipe (all white).
-// epd_partial(black)    black/white frame, no flash: only pixels that differ from what the panel shows are driven.
-//                       One pull, ~0.48 s, however much changed. Ink comes out dark red; erased pixels leave a light
-//                       ghost. Red pixels count as white. Keeps the panel session (DC-DC) open for the next call.
-// epd_sleep()           ends the partial session with the normal DC-DC soft shutdown. Call it when updates stop.
-// Planes: 960x672 MONO_HLSB, 1 = ink, as everywhere in main.c.
+// ---- Calm partial updates (panel_lab's driver)
+// epd_partial(black)  black/white frame, no flash: only pixels that differ from what the panel shows are driven.
+//                     One pull, ~0.48 s, however much changed. Ink comes out dark red; erased pixels leave a light
+//                     ghost. Keeps the panel session (DC-DC) open for the next call.
+// epd_sleep()         ends the partial session with the normal DC-DC soft shutdown.
+// part_shown must match the film before the first epd_partial: ui_wipe leaves both all white.
 
 #define PART_DRIVE 10 // frames of VDH/VDL per change (of 20 per pull): 10 for the film's health (owner); 6 is the least that reads clearly
 _Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 19, "the pull has 20 frames and the last one must be GND");
@@ -350,52 +346,13 @@ static void part_table(uint8_t *t)
     }
 }
 
-// Session open with PDi Wide_Large's waits (experiment 02: 348 ms, the table latches 10 ms after the last strobe),
-// then both RAMs = what the film shows.
+// Session open on the transition table, then both RAMs = what the film shows.
 static void part_open(void)
 {
     static uint8_t lut[400];
     part_table(lut);
-    gpio_set_level(RST, 1);
-    ms(2);
-    gpio_set_level(RST, 0);
-    ms(4);
-    gpio_set_level(RST, 1);
-    ms(20);
-    gpio_set_level(CS_L, 1);
-    gpio_set_level(CS_R, 1);
-    ms(5);
-    CMD(BOTH, 0x70, 0x71, 0x36);
-    CMD(BOTH, 0x05, 0x7D);
-    ms(50);
-    CMD(BOTH, 0x05, 0x00);
-    ms(1);
-    CMD(BOTH, 0xD8, 0x80);
-    CMD(BOTH, 0xD6, 0x00);
-    CMD(BOTH, 0xA7, 0x10);
-    ms(2);
-    CMD(BOTH, 0xA7, 0x00);
-    ms(10);
-    CMD(BOTH, 0x03, 0x00, 0x11);
-    for (int cog = LEFT; cog <= RIGHT; cog++) {
-        CMD(cog, 0x44, 0x00);
-        CMD(cog, 0x45, 0x80);
-        CMD(cog, 0xA7, 0x10);
-        ms(2);
-        CMD(cog, 0xA7, 0x00);
-        ms(10);
-        CMD(cog, 0x44, 0x06);
-        CMD(cog, 0x45, 0x84);
-        CMD(cog, 0xA7, 0x10);
-        ms(2);
-        CMD(cog, 0xA7, 0x00);
-        ms(10);
-    }
-    CMD(BOTH, 0x60, 0x25);
-    CMD(LEFT, 0x61, 0x01);
-    CMD(BOTH, 0x02, 0x00);
-    cmd(BOTH, 0xB0, lut, sizeof lut);
-    dcdc_on();
+    epd_reset();
+    epd_start(lut);
     CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW whole panel
     CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);             // DRFW whole panel; a shorter y1 copies the top rows down
     for (int cog = LEFT; cog <= RIGHT; cog++) send_rows(cog, 0x10, part_shown, 0, H - 1), send_rows(cog, 0x11, part_shown, 0, H - 1);
@@ -467,8 +424,8 @@ static void epd_partial(const uint8_t *black)
         if (w[1] >= w[0]) part_window(c + 1, black, w);
         memcpy(p, now[c], sizeof now[c]);
     }
-    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW whole panel again, as in experiment 05
-    int pull = epd_pull(1, 3000);
+    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW back to the whole panel
+    int pull = epd_pull(3000);
     memcpy(part_shown, black, PLANE);
     part_n++;
     ESP_LOGI(TAG, "partial: pull %d ms, total %d ms", pull, (int)((esp_timer_get_time() - t0) / 1000));
@@ -514,7 +471,7 @@ void ui_keys(const char *plus, const char *minus, const char *a, const char *b)
 
 void ui_frame(int pulls)
 {
-    (void)pulls; // ponytail: kept so apps build; a partial update is one pull whatever was asked
+    (void)pulls; // a partial update is one pull whatever was asked
     xSemaphoreTake(panel_lock, portMAX_DELAY);
     draw_bar();
     epd_partial(fb);
@@ -528,10 +485,10 @@ void ui_wipe(void)
     xSemaphoreTake(panel_lock, portMAX_DELAY);
     epd_sleep();
     memset(fb, 0xFF, sizeof fb);
-    epd_open(fb, NULL);
-    epd_pull(1, 5000);
-    epd_load(NULL, NULL, true); // both planes: after the pull 0x11 holds the black frame, which would select red
-    epd_pull(1, 5000);
+    epd_open(fb);
+    epd_pull(5000);
+    epd_load(NULL); // both planes: after the pull 0x11 holds the black frame, which would select red
+    epd_pull(5000);
     epd_close();
     memset(fb, 0, sizeof fb);
     memset(part_shown, 0, sizeof part_shown);
@@ -585,9 +542,10 @@ void btn_flush(void) { xQueueReset(btnq); }
 
 int btn_held(void) { return held; }
 
-// ---- Wi-Fi: off unless an app turns it on (no radio overhead at home); off again when the app returns.
+// ---- Wi-Fi: ranging (below) keeps the radio busy on every screen; an app that needs it otherwise takes it over with
+// wifi_on / wifi_connect, and the home screen gives it back to ranging.
 #if __has_include("wifi_secret.h")
-#include "wifi_secret.h" // WIFI_SSID / WIFI_PASS, gitignored; the release workflow writes it from repo secrets
+#include "wifi_secret.h" // WIFI_SSID / WIFI_PASS of the event Wi-Fi, gitignored; the release workflow writes it
 #else
 #define WIFI_SSID ""
 #define WIFI_PASS ""
@@ -655,11 +613,11 @@ void wifi_off(void)
 
 // ---- Ranging: badges running badge os find each other with ESP-NOW beacons on channel 1 and measure distances with
 // Wi-Fi FTM (802.11mc round-trip time). Each beacon carries the sender's own ranges, so every badge also learns the
-// distances between the others. Runs only between ranging_start() and ranging_stop() / wifi_off(): it needs Wi-Fi
-// in APSTA mode, the hidden SoftAP being this badge's FTM responder. Research: badge_os-radar RADAR_RESEARCH.md.
+// distances between the others. The OS starts it at boot; it needs Wi-Fi in APSTA mode, the hidden SoftAP being this
+// badge's FTM responder, so wifi_on/wifi_connect/wifi_off stop it. Background: RADAR_RESEARCH.md.
 #define RNG_CH 1
-#define RNG_FRAMES 16       // FTM frames per burst (API: 0, 16, 24, 32, 64; S3 reports said > 8 often fails: to test)
-#define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (owner checked side by side, v6.0.2)
+#define RNG_FRAMES 16       // FTM frames per session (API: 0, 16, 24, 32, 64): two bursts of 8
+#define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (checked side by side)
 #define RNG_KEEP 32         // ranges kept, own and shared
 #define RNG_SHARE 8         // own ranges per beacon
 #define RNG_STALE_US 30000000LL // a pair not heard of for 30 s is dropped
@@ -916,9 +874,9 @@ static void sao_init(void) // boot: open the bus and log what answers on it
         if (i2c_master_probe(sao_bus, a, 20) == ESP_OK) ESP_LOGI(TAG, "SAO I2C device at 0x%02x", a);
 }
 
-// The AS5600 also drives its angle as a voltage (0-3.3 V over a turn) on its port's GPIO1. The knob in SAO1 does not
-// answer on I2C, so read that: SAO1's GPIO1 is GPIO2 (ADC1). A floating pin follows the pull resistors, a driven one
-// does not: that tells a plugged knob from an empty slot.
+// The AS5600 also drives its angle as a voltage (0-3.3 V over a turn) on its port's GPIO1: read that when the knob
+// does not answer on I2C. SAO1's GPIO1 is GPIO2 (ADC1). A floating pin follows the pull resistors, a driven one does
+// not: that tells a plugged knob from an empty slot.
 static int knob_analog(int *up_mv, int *down_mv)
 {
     enum { PIN = 2 };
@@ -1000,8 +958,8 @@ int battery_pct(void)
 }
 
 // ---- Top bar (rows 0..TOP-1) on every screen, drawn over fb by ui_frame. The buttons sit two in each top corner,
-// MENU above A on the left, MENU - above B on the right: each label (ui_keys) sits beside its button, with a tab at
-// the edge pointing at it. In the middle: the app's name, then the OS version and the battery.
+// MENU + above A on the left, MENU - above B on the right: each label (ui_keys) sits beside its button, with a tab at
+// the edge pointing at it. In the middle: the app's name, then the username, OS version and battery.
 static void draw_bar(void)
 {
     static const int ky[4] = {4, 4, 26, 26}; // label rows of BTN_PLUS, BTN_MINUS, BTN_A, BTN_B

@@ -38,7 +38,7 @@ enum { SUN, FEW, CLOUD, FOG, RAIN, SNOW, STORM };
 
 static int kind(int c)
 {
-    return c == 0 || c == 1 ? (c ? FEW : SUN) : c == 2 ? FEW : c == 3 ? CLOUD : c < 50 ? FOG
+    return c == 0 ? SUN : c == 1 || c == 2 ? FEW : c == 3 ? CLOUD : c < 50 ? FOG
         : (c >= 71 && c <= 77) || c == 85 || c == 86 ? SNOW : c >= 95 ? STORM : RAIN;
 }
 
@@ -355,7 +355,7 @@ static void run(void *arg)
     }
 }
 
-// The app task's stack is too small for TLS: run on our own task (it never returns; home is MENU + and MENU -).
+// Never returns: home is MENU + and MENU -.
 void app_weather(void)
 {
     xTaskCreate(run, "weather", 16384, NULL, 4, NULL);

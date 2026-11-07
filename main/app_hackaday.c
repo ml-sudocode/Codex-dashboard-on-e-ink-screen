@@ -48,7 +48,7 @@ static img_t *imgs;
 static char *feed, *jpg;
 static char err[64];
 static volatile int stage, bytes, imgs_done, cur_post; // stage: 0 joining, 1 downloading, 2 feed ready, 3 failed
-static volatile int join_ms, feed_ms;
+static volatile int join_ms;
 static volatile bool net_stop, net_running, reading; // reading: a post is open
 
 // ---- Text: HTML/XML/UTF-8 to the 7-bit font.
@@ -343,7 +343,7 @@ static void net(void *arg)
         stage = 1;
         c = client();
         int n = get_feed(c);
-        feed_ms = (esp_timer_get_time() - t0) / 1000 - join_ms;
+        int feed_ms = (esp_timer_get_time() - t0) / 1000 - join_ms;
         ESP_LOGI("rss", "join %d ms, feed %d bytes in %d ms", join_ms, n, feed_ms);
         if (n >= 0 && (parse(), !nposts)) snprintf(err, sizeof err, "No posts in the feed (%d bytes).", n);
         stage = n < 0 || !nposts ? 3 : 2;
@@ -487,9 +487,11 @@ static void draw_card(int i)
     char s[80];
     post_t *p = &posts[i];
     memset(fb, 0, sizeof fb);
-    int y = TOP + 8;
-    if (p->cover >= 0) picture(p->cover, TOP, imgs[p->cover].h), y = TOP + imgs[p->cover].h + 8;
-    y = p->cover >= 0 ? wrap(X0, y, 2, 20, 2, p->title) : wrap(X0, TOP + 48, 4, 40, 6, p->title) + 16;
+    int y;
+    if (p->cover >= 0) {
+        picture(p->cover, TOP, imgs[p->cover].h);
+        y = wrap(X0, TOP + imgs[p->cover].h + 8, 2, 20, 2, p->title);
+    } else y = wrap(X0, TOP + 48, 4, 40, 6, p->title) + 16;
     meta(s, sizeof s - 12, p);
     int n = strlen(s);
     snprintf(s + n, sizeof s - n, "  %d/%d", i + 1, nposts);
@@ -567,8 +569,9 @@ static void stop_net(void)
     nposts = nimg = 0;
 }
 
-static void run(const char *name)
+static void run(void *arg)
 {
+    const char *name = arg;
     for (int switches = 0;;) { // load
         stop_net();
         *err = 0;
@@ -602,23 +605,16 @@ static void run(const char *name)
     }
 }
 
-static const char *run_name;
-
-static void task(void *arg)
-{
-    run(run_name);
-}
-
-// Takes over the badge for good (home is MENU + and MENU -). The app task's stack is too small for TLS: own tasks.
+// Takes over the badge for good (home is MENU + and MENU -).
 void rss_reader(const char *url, const char *name)
 {
-    feed_url = url, run_name = name;
+    feed_url = url;
     feed = heap_caps_malloc(CAP, MALLOC_CAP_SPIRAM);
     jpg = heap_caps_malloc(JCAP, MALLOC_CAP_SPIRAM);
     posts = heap_caps_calloc(MAXP, sizeof *posts, MALLOC_CAP_SPIRAM);
     imgs = heap_caps_calloc(MAXI, sizeof *imgs, MALLOC_CAP_SPIRAM);
     lines = heap_caps_calloc(MAXL, sizeof *lines, MALLOC_CAP_SPIRAM);
-    xTaskCreate(task, "rss", 16384, NULL, 4, NULL);
+    xTaskCreate(run, "rss", 16384, (void *)name, 4, NULL);
     vTaskSuspend(NULL);
 }
 

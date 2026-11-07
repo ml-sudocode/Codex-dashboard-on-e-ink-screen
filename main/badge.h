@@ -6,7 +6,7 @@
 #define W 960
 #define H 672
 #define PLANE (W * H / 8) // MONO_HLSB, MSB = leftmost pixel, 1 = black
-#define TOP 48 // rows 0..TOP-1 are the OS top bar in apps (name, version, battery): ui_frame draws over them
+#define TOP 48 // rows 0..TOP-1 are the OS top bar on every screen: ui_frame draws over them
 
 extern uint8_t fb[PLANE]; // what the next ui_frame() shows
 void ms(int t);           // sleep at least t ms
@@ -17,7 +17,7 @@ void text(int x, int y, int scale, const char *s, bool ink); // 8x8 font, 8 * sc
 
 // Panel: ui_frame shows fb with one calm partial update, ~0.48 s however much changed (~2 frames/s is the hardware
 // floor). Only pixels that changed are driven, nothing else flashes. Ink comes out dark red, erased ink leaves a light
-// ghost. pulls is ignored (kept so old apps build). No change since the last frame = no refresh.
+// ghost. pulls is ignored. No change since the last frame = no refresh.
 // Call ui_close() when the screen will sit still for a while.
 void ui_frame(int pulls);
 void ui_close(void);
@@ -37,7 +37,7 @@ int btn_held(void); // buttons held right now: bit (1 << BTN_x) set while presse
 // The OS runs ranging (below) on every screen. An app that calls wifi_on or wifi_connect takes the radio over:
 // ranging stops until the app returns home or the badge restarts.
 void wifi_on(void);                 // radio on, station mode, no network joined (ESP-NOW apps: set the channel next)
-bool wifi_connect(int timeout_ms); // wifi_on + join the badge Wi-Fi (main/wifi_secret.h); true once there is an IP
+bool wifi_connect(int timeout_ms); // wifi_on + join the saved Wi-Fi ("ssid"/"pass"); true once there is an IP
 void wifi_off(void);                // radio off
 // Ranging (Radar and any app): badges running badge os find each other (ESP-NOW beacons, channel 1) and measure
 // their distance with Wi-Fi FTM; each badge shares its own ranges, so you also get the distances between others.
@@ -70,7 +70,7 @@ bool cfg_set(const char *key, const char *val);
 bool cfg_get_image(uint8_t *img); // false if none saved
 bool cfg_set_image(const uint8_t *img); // NULL deletes it
 int knob_angle(void); // AS5600 knob add-on on an SAO port: 0-4095 per turn, -1 if none or no magnet (plug in any time)
-int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown (ADC2: fails while Wi-Fi is busy)
+int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown; a failed read (ADC2 vs Wi-Fi) repeats the last
 
 // Apps: run() takes over the badge. Returning goes back to the home screen; most apps never return.
 void app_update(void);

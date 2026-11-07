@@ -2,7 +2,7 @@
 // B fires (press, or hold for a steady stream). The AS5600 knob add-on, when turned, sets the heading directly.
 // Rocks drift and wrap around the edges; a hit rock splits in two smaller ones, the smallest vanish. A cleared
 // field shakes the ghosts off the panel and brings more rocks. Three ships; game over shows the score for 3 s,
-// then a new game starts by itself. A reboot goes home.
+// then a new game starts by itself.
 // Like Snake: the game ticks on its own clock, a second task shows the latest state whenever the panel is free.
 // Everything is drawn as 3 px outlines that wrap around the play field, so a frame changes few pixels.
 #include <math.h>

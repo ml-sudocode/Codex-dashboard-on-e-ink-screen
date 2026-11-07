@@ -1,7 +1,7 @@
 // Blocks: four-cell pieces fall into a 10 x 20 well of 28 px cells. Full rows clear; every 10 rows the level
 // rises and the pieces fall faster (one row per second at level 0). A / B move left / right (hold to repeat),
 // MENU - turns clockwise, MENU + drops. The AS5600 knob add-on moves the piece too: a sixteenth of a turn is one
-// cell. When a new piece cannot enter, the score shows for 3 s, then a new game starts by itself. A reboot goes home.
+// cell. When a new piece cannot enter, the score shows for 3 s, then a new game starts by itself.
 // The game runs on its own 20 ms clock; a second task shows the latest state whenever the panel is free, so the game
 // speed does not depend on the refresh speed (same scheme as app_snake.c).
 #include <stdio.h>

@@ -44,7 +44,7 @@ static struct {
     char s[64];
     int scale; // 0: the progress bar
 } lines[8];
-static volatile int nlines, pct, want, shown;
+static volatile int nlines, pct, want;
 static volatile bool stop;
 
 static void draw_task(void *caller)
@@ -64,8 +64,7 @@ static void draw_task(void *caller)
             }
         }
         ui_frame(1);
-        shown = g;
-        if (stop && shown == want) break;
+        if (stop && g == want) break;
         if (want == g) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
     ui_close();
@@ -99,7 +98,7 @@ static void finish_screen(void) // show the last lines, then the draw task ends
 
 static void done(const char *l1, const char *l2) // final message, then back on any button
 {
-    ui_keys("Back", "Back", "Back", "Back"); // any button
+    ui_keys("Back", "Back", "Back", "Back");
     say(4, l1);
     if (l2) say(3, l2);
     finish_screen();
@@ -120,7 +119,7 @@ static void run(void)
 {
     const char *ours = esp_app_get_description()->version;
     char s[64];
-    nlines = pct = want = shown = 0;
+    nlines = pct = want = 0;
     stop = false;
     xTaskCreate(draw_task, "ota draw", 4096, xTaskGetCurrentTaskHandle(), 5, &drawer);
     say(6, "Online update");
@@ -192,7 +191,6 @@ static void run(void)
     esp_restart();
 }
 
-// The app task's stack (3.5 KB) is far too small for TLS: run on our own task and wait for it.
 static void task(void *caller)
 {
     run();

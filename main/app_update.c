@@ -87,7 +87,7 @@ static void message(const char *s)
     memset(fb, 0, sizeof fb);
     text(48, TOP + 24, 6, "Wired update", true);
     text(48, 300, 6, s, true);
-    ui_frame(3);
+    ui_frame(1);
     ui_close();
 }
 
@@ -109,7 +109,7 @@ static void wired(void)
         text(48, 320, 3, "Badge on stock MicroPython:", true);
         text(48, 360, 3, "hold BOOT, tap RESET.", true);
         ui_keys("Home", "Home", "Home", "Home");
-        ui_frame(3);
+        ui_frame(1);
         ui_close();
         while (pct == -1)
             if (btn_get(200) >= 0) stop = true;
@@ -117,7 +117,7 @@ static void wired(void)
 
         ui_keys(NULL, NULL, NULL, NULL);
         // Copying: redraw whenever the number moved; each frame takes ~0.5 s while the copy task keeps going.
-        for (int shown = -1, pulls = 3; pct >= 0 && pct <= 100;) {
+        for (int shown = -1; pct >= 0 && pct <= 100;) {
             int p = pct;
             if (p == shown) {
                 ms(100);
@@ -132,8 +132,7 @@ static void wired(void)
             text(800, TOP + 56, 4, s, true);
             text(48, 300, 4, "Updating connected badge", true);
             text(48, 560, 3, "Wired update", true);
-            ui_frame(pulls);
-            pulls = 1;
+            ui_frame(1);
             shown = p;
         }
         ui_close();
@@ -151,7 +150,7 @@ static void wired(void)
 void app_update(void)
 {
     static const char *name[2] = {"Online update", "Flash another badge"};
-    for (int sel = 0, pulls = 3;;) {
+    for (int sel = 0;;) {
         memset(fb, 0, sizeof fb);
         text(48, TOP + 24, 6, "Update", true);
         for (int i = 0; i < 2; i++) {
@@ -159,8 +158,7 @@ void app_update(void)
             if (i == sel) outline(80, 208 + i * 200, 800, 104, 8);
         }
         ui_keys("Up", "Down", "Pick", "Pick");
-        ui_frame(pulls);
-        pulls = 1;
+        ui_frame(1);
         int b = btn_get(10000);
         if (b < 0) { // the screen sits still
             ui_close();

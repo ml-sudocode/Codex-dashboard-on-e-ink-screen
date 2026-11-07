@@ -2,26 +2,29 @@
 
 A small operating system for the Hackaday Supercon 2026 "Billboard Badge" (ESP32-S3 with 8 MB PSRAM and a 9.7"
 960x672 black/white/red e-paper), written in C on ESP-IDF. The badge boots to an iOS-style home screen of app icons.
-Apps take over the badge, and you get back home with a reboot or when an app returns.
+Apps take over the badge; hold MENU + and MENU - together to get back home.
 
 ## Features
 - **Home screen**: 8 app icons per page, OS version bottom right.
-- **Keymap on every screen**: what each button does right now, printed beside the button.
 - **Calm partial e-paper updates**: about 0.5 s per frame, only the pixels that change move, nothing flashes.
   This is a custom waveform for the panel's two Pervasive Displays B1 controllers. The panel can't refresh faster
   than about 2 frames per second.
-- **Top bar on every screen**: app name, OS version, battery, and the button labels.
+- **Top bar on every screen**: what each button does right now, printed beside the button; app name, username,
+  OS version and battery in the middle.
 - **Online update**: pulls the latest GitHub release over Wi-Fi (OTA, with rollback if the new version doesn't
   boot).
 - **Badge-to-badge update**: one badge flashes its own firmware onto another over a USB-C cable (USB host mode).
-- **Wi-Fi**: the radio runs ranging in the background; an app that needs it otherwise (Pong, Online update) takes it over.
+- **Wi-Fi**: the radio runs ranging in the background; an app that needs it otherwise (Pong, Online update, the
+  feed and weather apps) takes it over.
 - **Ranging service**: badges find each other with ESP-NOW and measure their distance with Wi-Fi FTM (802.11mc
   round-trip time). Each badge shares its measurements, so every badge learns the distances between the others.
+- **Settings**: saved in flash and kept across updates; edited from a phone through the Settings app.
 - **Add-ons**: AS5600 magnetic knob on an SAO port (I2C 0x36) as an optional controller.
 
 ## Apps
 | App | What it does |
 |---|---|
+| Badge | Name tag: "HELLO my name is", or your own text or picture from Settings |
 | Update | Online update from GitHub, or flash another badge over USB-C |
 | Pong | Two-badge Pong over ESP-NOW, buttons or knob |
 | Snake | Nonstop snake with wrap-around walls |
@@ -29,6 +32,10 @@ Apps take over the badge, and you get back home with a reboot or when an app ret
 | Arcade games | Three single-player games: falling blocks, a wave of descending aliens, and a field of drifting rocks to shoot |
 | Radar | Nearby badges running badge os, with distances, and a map once 3+ badges are in range |
 | Source | A QR code to this repo |
+| Hackaday | Hackaday's latest posts with their images, one per screen; open one to read it |
+| News | BBC World headlines, same reader |
+| Weather | Current weather and a 5-day forecast (Open-Meteo) for a saved city or coordinates |
+| Settings | Opens a Wi-Fi hotspot "Badge-XXXX" (password `supercon`) with a settings page: username, Wi-Fi, Badge text or picture, weather place and units |
 
 ## Controls
 The four buttons sit two in each top corner: MENU + above A on the left, MENU - above B on the right. The top bar

@@ -37,8 +37,12 @@
 - The OS has closed its panel session when your app starts. Draw into `fb` (960x672, 1 bit, 1 = black) with
   `box`, `outline`, `text`, then `ui_frame(1)` (the pulls argument is ignored now). The screen starts white.
   `ui_close()` when the screen will sit still.
-- Rows 0..`TOP`-1 (48 px) are the OS top bar (app name, OS version, battery); `ui_frame` draws it over `fb`.
+- Rows 0..`TOP`-1 (48 px) are the OS top bar (button labels, app name, username, OS version, battery); `ui_frame`
+  draws it over `fb`.
   Keep your picture below `TOP`.
+- Wi-Fi: the OS keeps ranging running on every screen. `wifi_connect` joins the saved network (Settings, the event
+  Wi-Fi by default) and stops ranging; when done, `wifi_off()` then `ranging_start()`. Settings live behind
+  `cfg_get`/`cfg_set` (keys in `badge.h`).
 - Buttons: `btn_get(timeout_ms)` returns `BTN_PLUS`, `BTN_MINUS`, `BTN_A`, `BTN_B` (as printed; two in each top
   corner: MENU + above A on the left, MENU - above B on the right), or -1. Label them with
   `ui_keys(plus, minus, a, b)`: the OS shows each label beside its button in the top bar. Holding MENU + and
@@ -46,7 +50,7 @@
   been flushed.
 
 ## The panel (measured; the full story with pins and timings is in DEVICE_INFO.md)
-- `ui_frame` is a calm partial update (panel_lab's driver): ~0.48 s however much changed, only changed pixels
+- `ui_frame` is a calm partial update: ~0.48 s however much changed, only changed pixels
   move, nothing flashes. ~2 frames/s is the hardware floor. Ink is dark red, erased ink leaves a light ghost.
   No red. A fresh panel session every 60 frames costs ~0.5 s. `ui_wipe()` (~2.8 s) shakes the ghosts off.
 - Never run the slow 3-colour refresh (~35 s): the owner does not want it on the badge.
