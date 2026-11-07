@@ -20,7 +20,7 @@ ESP-IDF 6.0 (tested with v6.0.2):
 idf.py build
 idf.py -p /dev/cu.usbmodem101 flash
 ```
-The first boot after flashing does one slow (~35 s) refresh to clear any red left on the panel.
+Every boot shakes the panel black, then white (~2.8 s); after that every frame is a calm ~0.5 s partial update.
 
 Panel driver, pins and timings come from https://github.com/yigitabi5444/supercon26-badge-idf (see its NOTES.md).
 Hardware, pins, screen modes, timings and ghosting: [DEVICE_INFO.md](DEVICE_INFO.md).

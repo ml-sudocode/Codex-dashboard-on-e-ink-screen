@@ -74,11 +74,11 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 ### Refresh modes (measured)
 | Mode | Cost | Looks | Use for |
 |---|---|---|---|
-| **Clean full**: the panel's own OTP waveform | pull 33 s (BUSY 32.96 s), ~35 s total | true black/white/red, removes all ghosting and red | anything with red; a clean-up now and then |
+| **Clean full**: the panel's own OTP waveform | pull 33 s (BUSY 32.96 s), ~35 s total | true black/white/red, removes all ghosting and red | never in badge os (owner's rule) |
 | **Fast full**: badge team table `lutb_base` at 0xB0, 3 pulls | ~3.5 s with the quick open | the whole panel flashes; black is grey-brown to maroon; no red | a clean-ish black/white screen |
-| **Fast frame** in an open session: planes + 1 pull | 1.07 s (946 ms pull + ~120 ms transfer) | whole panel flashes each frame; ghosting builds up | menus, animation, games (badge os `ui_frame(1)`) |
-| **Refresh window** (DRFW 0x90 y range) | ~490 ms pull for a y window | only the window refreshes | experimental: not in the OS yet |
-| **Calm transition table**: previous frame in the red RAM | 949 ms per pull | nothing outside the changed pixels moves, but drawn pixels come out dark red and erased ones leave a light ghost | experimental (panel_lab is working on the colour) |
+| **Fast frame** in an open session: planes + 1 pull | 1.07 s (946 ms pull + ~120 ms transfer) | whole panel flashes each frame; ghosting builds up | badge os `ui_wipe` (one black, one white frame) |
+| **Refresh window** (DRFW 0x90 y range) | ~490 ms pull for a y window | copies rows 0..y1 down the panel | never: keep DRFW `00 3B 00 A9` |
+| **Calm partial** (panel_lab `epd_partial`): film state in 0x11, new frame in 0x10, 20-frame transition table | ~0.48 s per frame, however much changed | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
 
 ### Timing details
 - A pull (`0x15 3C`) plays the latched waveform; its length follows the table: frames x ~23.7 ms. The badge team
@@ -104,11 +104,11 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - The red pigment moves at a lower drive than the black one: weak or long-but-chopped drives pull red along, so
   "black" from a fast table comes out brownish to dark red, worse further from the CoGs (bottom of the panel).
 - Red already on the film (an old nametag) survives every fast waveform; only the clean full refresh removes it.
-  badge os does one clean refresh on its first boot for this reason.
+  badge os never runs it (owner's rule), so an old nametag's red can stay.
 - Unbalanced drives (more VDH than VDL on average) push the whole panel one way: the white background turns pink
   within a few updates (badge team doc). Long runs of ground frames also left a faint red tint here.
-- The cure is always the clean full refresh (35 s). Do one when the screen will sit still for long, and at least
-  daily (spec). PDi suggests a full refresh after ~20 fast updates or a scene change.
+- The full cure is the clean refresh (35 s), which badge os never runs. `ui_wipe` (fast black, then white) takes
+  most ghosting off at scene changes and on every boot.
 
 ### Rules that keep the panel alive
 - Send `0x70 71 36` to both CoGs after every reset: without it a B1 refresh draws about 2 A (badge team errata 9).

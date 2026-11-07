@@ -15,7 +15,6 @@
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "esp_rom_crc.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_wifi.h"
@@ -175,17 +174,16 @@ static const uint8_t lutb[400] = {
     0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
 };
 
-// quick: PDi Wide_Large's waits for this CoG family. Proven on the fast path only (panel_lab experiment 02:
-// session open 348 ms instead of 2443 ms, 0xB0 still latches); the slow OTP refresh keeps the GU_large waits.
-static void epd_reset(bool quick)
+// PDi Wide_Large's waits for this CoG family (panel_lab experiment 02: session open 348 ms instead of 2443 ms,
+// 0xB0 still latches). badge os never runs the slow OTP refresh (~35 s), so only these waits are here.
+static void epd_reset(void)
 {
-    if (!quick) ms(200);
     gpio_set_level(RST, 1);
-    ms(quick ? 2 : 20);
+    ms(2);
     gpio_set_level(RST, 0);
-    ms(quick ? 4 : 200);
+    ms(4);
     gpio_set_level(RST, 1);
-    ms(quick ? 20 : 200);
+    ms(20);
     gpio_set_level(CS_L, 1);
     gpio_set_level(CS_R, 1);
     ms(5);
@@ -201,13 +199,6 @@ static void epd_load(const uint8_t *black, const uint8_t *red, bool with_red)
         send_rows(cog, 0x10, black, 0, H - 1);
         if (with_red) send_rows(cog, 0x11, red, 0, H - 1);
     }
-}
-
-// Only rows y0..y1 of the black plane (the DUW window limits the RAM write to those lines).
-static void epd_load_rows(const uint8_t *black, int y0, int y1)
-{
-    CMD(BOTH, 0x13, 0x00, 0x3B, y0 & 0xFF, y0 >> 8, y1 & 0xFF, y1 >> 8); // DUW
-    for (int cog = LEFT; cog <= RIGHT; cog++) send_rows(cog, 0x10, black, y0, y1);
 }
 
 static void dcdc_on(void)
@@ -242,16 +233,16 @@ static void dcdc_on(void)
     wait_ready("dc-dc on", 10000); // never trigger into a booster that is still ramping
 }
 
-// fast: load the short waveform instead of the panel's own 33 s one (black/white only, red goes pale).
-static void epd_open(const uint8_t *black, const uint8_t *red, bool fast)
+// Loads the short waveform instead of the panel's own 33 s one (black/white only, red goes pale).
+static void epd_open(const uint8_t *black, const uint8_t *red)
 {
-    int hi = fast ? 2 : 100, lo = fast ? 10 : 100; // load strobe waits
-    epd_reset(fast);
+    int hi = 2, lo = 10; // load strobe waits
+    epd_reset();
     epd_load(black, red, true);
     CMD(BOTH, 0x05, 0x7D);
-    ms(fast ? 50 : 200);
+    ms(50);
     CMD(BOTH, 0x05, 0x00);
-    ms(fast ? 1 : 10);
+    ms(1);
     CMD(BOTH, 0xD8, 0x80); // MS_SYNC
     CMD(BOTH, 0xD6, 0x00); // BVSS
     CMD(BOTH, 0xA7, 0x10);
@@ -267,7 +258,7 @@ static void epd_open(const uint8_t *black, const uint8_t *red, bool fast)
         CMD(cog, 0xA7, 0x00);
         ms(lo);
         CMD(cog, 0x44, 0x06);
-        CMD(cog, 0x45, fast ? 0x84 : 0x82); // temperature 0x50 + 2 * C: 26 C as the badge team uses, 25 C stock
+        CMD(cog, 0x45, 0x84); // temperature 0x50 + 2 * C: 26 C as the badge team uses
         CMD(cog, 0xA7, 0x10);
         ms(hi);
         CMD(cog, 0xA7, 0x00);
@@ -276,7 +267,7 @@ static void epd_open(const uint8_t *black, const uint8_t *red, bool fast)
     CMD(BOTH, 0x60, 0x25); // TCON
     CMD(LEFT, 0x61, 0x01); // STV_DIR, master only
     CMD(BOTH, 0x02, 0x00); // VCOM
-    if (fast) cmd(BOTH, 0xB0, lutb, sizeof lutb); // one chance per session: rewriting it re-latches the slow one
+    cmd(BOTH, 0xB0, lutb, sizeof lutb); // one chance per session: rewriting it re-latches the slow one
     dcdc_on();
 }
 
@@ -317,10 +308,165 @@ static void epd_init(void)
     spi_bus_config_t bus = {.mosi_io_num = MOSI, .sclk_io_num = SCK, .miso_io_num = -1,
                             .quadwp_io_num = -1, .quadhd_io_num = -1, .max_transfer_sz = 4096};
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO));
-    spi_device_interface_config_t dev = {.clock_speed_hz = 8000000, .mode = 0, .spics_io_num = -1, .queue_size = 1};
+    spi_device_interface_config_t dev = {.clock_speed_hz = 20000000, .mode = 0, .spics_io_num = -1, .queue_size = 1};
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev, &spi));
 }
 
+
+// ==== panel_lab: calm partial updates for the 9.7" B1 panel (mechanism proven in experiment 05) ====
+// From panel_lab/driver/epd_partial.c (INTEGRATION.md, FINDINGS.md experiments 05-10); 1185 calls in 10 min on the badge.
+//
+// part_shown must match the film before the first epd_partial: badge os gets there with ui_wipe (all white).
+// epd_partial(black)    black/white frame, no flash: only pixels that differ from what the panel shows are driven.
+//                       One pull, ~0.48 s, however much changed. Ink comes out dark red; erased pixels leave a light
+//                       ghost. Red pixels count as white. Keeps the panel session (DC-DC) open for the next call.
+// epd_sleep()           ends the partial session with the normal DC-DC soft shutdown. Call it when updates stop.
+// Planes: 960x672 MONO_HLSB, 1 = ink, as everywhere in main.c.
+
+#define PART_DRIVE 19 // frames of VDH/VDL per change: 19 fills the 20-frame pull; 6 is the least that reads clearly
+_Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 19, "the pull has 20 frames and the last one must be GND");
+
+static uint8_t part_shown[PLANE]; // what the film shows; after every pull the CoG's 0x11 holds the same
+static int part_prev[2][4];       // per CoG, the byte box {x0, x1, y0, y1} the last pull changed; x1 < x0: none
+static int part_n = -1;           // pulls in the open partial session, -1 = no session
+
+// Transition table: old frame in 0x11, new frame in 0x10, table = (old << 1) | new. Table 1 (white->black) VDH and
+// table 2 (black->white) VDL for the first PART_DRIVE frames, then GND; tables 0, 3 and VCOM at GND. Every group runs
+// only its phases c and d (SRab 0): 10 groups x 2 frames = 20 frames = 475 ms, the shortest pull this CoG runs
+// (a zero TP, RP 0 and SRab = SRcd = 0 all hang it). The last frame is GND, so no pixel keeps a charge.
+static void part_table(uint8_t *t)
+{
+    for (int k = 0; k < 50; k++) memcpy(t + 8 * k, (const uint8_t[]){0, 1, 1, 0, 1, 1, 1, 1}, 8);
+    for (int f = 0; f < PART_DRIVE; f++) {
+        int g = f / 2, shift = f % 2 ? 0 : 2; // phase c: bits 3-2, phase d: bits 1-0
+        t[(10 + g) * 8] |= 1 << shift;        // VDH
+        t[(20 + g) * 8] |= 2 << shift;        // VDL
+    }
+}
+
+// Session open with PDi Wide_Large's waits (experiment 02: 348 ms, the table latches 10 ms after the last strobe),
+// then both RAMs = what the film shows.
+static void part_open(void)
+{
+    static uint8_t lut[400];
+    part_table(lut);
+    gpio_set_level(RST, 1);
+    ms(2);
+    gpio_set_level(RST, 0);
+    ms(4);
+    gpio_set_level(RST, 1);
+    ms(20);
+    gpio_set_level(CS_L, 1);
+    gpio_set_level(CS_R, 1);
+    ms(5);
+    CMD(BOTH, 0x70, 0x71, 0x36);
+    CMD(BOTH, 0x05, 0x7D);
+    ms(50);
+    CMD(BOTH, 0x05, 0x00);
+    ms(1);
+    CMD(BOTH, 0xD8, 0x80);
+    CMD(BOTH, 0xD6, 0x00);
+    CMD(BOTH, 0xA7, 0x10);
+    ms(2);
+    CMD(BOTH, 0xA7, 0x00);
+    ms(10);
+    CMD(BOTH, 0x03, 0x00, 0x11);
+    for (int cog = LEFT; cog <= RIGHT; cog++) {
+        CMD(cog, 0x44, 0x00);
+        CMD(cog, 0x45, 0x80);
+        CMD(cog, 0xA7, 0x10);
+        ms(2);
+        CMD(cog, 0xA7, 0x00);
+        ms(10);
+        CMD(cog, 0x44, 0x06);
+        CMD(cog, 0x45, 0x84);
+        CMD(cog, 0xA7, 0x10);
+        ms(2);
+        CMD(cog, 0xA7, 0x00);
+        ms(10);
+    }
+    CMD(BOTH, 0x60, 0x25);
+    CMD(LEFT, 0x61, 0x01);
+    CMD(BOTH, 0x02, 0x00);
+    cmd(BOTH, 0xB0, lut, sizeof lut);
+    dcdc_on();
+    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW whole panel
+    CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);             // DRFW whole panel; a shorter y1 copies the top rows down
+    for (int cog = LEFT; cog <= RIGHT; cog++) send_rows(cog, 0x10, part_shown, 0, H - 1), send_rows(cog, 0x11, part_shown, 0, H - 1);
+    for (int c = 0; c < 2; c++) part_prev[c][0] = 1, part_prev[c][1] = 0;
+    part_n = 0;
+}
+
+// Byte box {x0, x1, y0, y1} of one CoG's half where frames a and b differ; x1 < x0 if they do not.
+static void part_box(const uint8_t *a, const uint8_t *b, int cog, int *box)
+{
+    int off = cog == RIGHT ? W / 16 : 0;
+    box[0] = W / 16, box[1] = -1, box[2] = H, box[3] = -1;
+    for (int y = 0; y < H; y++) {
+        const uint8_t *p = a + y * (W / 8) + off, *q = b + y * (W / 8) + off;
+        if (!memcmp(p, q, W / 16)) continue;
+        for (int x = 0; x < W / 16; x++)
+            if (p[x] != q[x]) box[0] = MIN(box[0], x), box[1] = MAX(box[1], x);
+        box[2] = MIN(box[2], y), box[3] = y;
+    }
+}
+
+// Box b of one CoG's half of src into its 0x10 RAM: DUW + RAM_RW window (RAM x = 59 - screen byte, experiment 02),
+// the rows in screen order, bit-reversed.
+static void part_window(int cog, const uint8_t *src, const int *b)
+{
+    static DMA_ATTR uint8_t row[W / 16];
+    int x0 = b[0], x1 = b[1], y0 = b[2], y1 = b[3], cs = cog == LEFT ? CS_L : CS_R;
+    uint8_t index = 0x10;
+    CMD(cog, 0x13, 59 - x1, 59 - x0, y0 & 0xFF, y0 >> 8, y1 & 0xFF, y1 >> 8);
+    CMD(cog, 0x12, 59 - x0, y0 & 0xFF, 0x14 | y0 >> 8);
+    gpio_set_level(DC, 0);
+    gpio_set_level(cs, 0);
+    tx(&index, 1);
+    gpio_set_level(cs, 1);
+    gpio_set_level(DC, 1);
+    gpio_set_level(cs, 0);
+    for (int y = y0; y <= y1; y++) {
+        const uint8_t *s = src + y * (W / 8) + (cog == RIGHT ? W / 16 : 0);
+        for (int x = x0; x <= x1; x++) row[x - x0] = REVERSE_BITS ? rev(s[x]) : s[x];
+        tx(row, x1 - x0 + 1);
+    }
+    gpio_set_level(cs, 1);
+}
+
+static void epd_sleep(void)
+{
+    if (part_n >= 0) epd_close();
+    part_n = -1;
+}
+
+static void epd_partial(const uint8_t *black)
+{
+    int64_t t0 = esp_timer_get_time();
+    int now[2][4];
+    bool any = false;
+    for (int c = 0; c < 2; c++) part_box(black, part_shown, c + 1, now[c]), any |= now[c][1] >= now[c][0];
+    if (!any) return ms(1); // nothing changed; still yield, apps call this in tight loops
+    if (part_n == 60) epd_sleep(); // a fresh session every 60 pulls: sessions of 60 are proven, longer ones are not
+    if (part_n < 0) part_open();
+    // The CoG swaps 0x10 and 0x11 after every pull, so 0x11 already holds what the film shows and 0x10 holds the frame
+    // before it. Rewrite 0x10 where that frame or the new one differs from the film: this pull's box and the last one.
+    for (int c = 0; c < 2; c++) {
+        int w[4], *p = part_prev[c];
+        memcpy(w, now[c], sizeof w);
+        if (p[1] >= p[0]) {
+            if (w[1] < w[0]) memcpy(w, p, sizeof w);
+            else w[0] = MIN(w[0], p[0]), w[1] = MAX(w[1], p[1]), w[2] = MIN(w[2], p[2]), w[3] = MAX(w[3], p[3]);
+        }
+        if (w[1] >= w[0]) part_window(c + 1, black, w);
+        memcpy(p, now[c], sizeof now[c]);
+    }
+    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW whole panel again, as in experiment 05
+    int pull = epd_pull(1, 3000);
+    memcpy(part_shown, black, PLANE);
+    part_n++;
+    ESP_LOGI(TAG, "partial: pull %d ms, total %d ms", pull, (int)((esp_timer_get_time() - t0) / 1000));
+}
 
 // ---- Drawing into fb
 uint8_t fb[PLANE];
@@ -348,55 +494,29 @@ void text(int x, int y, int scale, const char *s, bool ink)
                 if (font8x8_basic[*s & 0x7F][r] >> c & 1) box(x + c * scale, y + r * scale, scale, scale, ink);
 }
 
-// ---- Panel frames: one short-waveform session shared by consecutive frames, a fresh one every 20 (badge team).
-static int ui_n = -1;       // frames shown in the open session, -1 = none open
-static uint32_t row_crc[H]; // CRC32 of every row as last sent to the panel: ui_frame diffs against it
-static bool row_crc_ok;     // false until the first frame: what the panel shows at boot is unknown
-
-// Apps draw into fb; ui_frame works out which rows changed since the last frame and refreshes only those. The panel
-// scans from the top down to the refresh window's bottom edge, so a frame costs ~949 ms x (last changed row / 672),
-// and rows outside the window are not driven at all (panel_lab FINDINGS.md, refresh window). Less scan time also
-// means less drive per pixel: a band high up comes out lighter than a full frame from the same pulls.
+// ---- Panel frames: apps draw into fb, ui_frame shows it with one calm partial update (only changed pixels move).
 void ui_frame(int pulls)
 {
-    int y0 = H, y1 = -1;
-    for (int y = 0; y < H; y++) {
-        uint32_t c = esp_rom_crc32_le(0, fb + y * (W / 8), W / 8);
-        if (c != row_crc[y] || !row_crc_ok) row_crc[y] = c, y0 = MIN(y0, y), y1 = y;
-    }
-    row_crc_ok = true;
-    if (y1 < 0) { // nothing changed, nothing to draw
-        ms(1);
-        return;
-    }
-    if (ui_n < 0 || ui_n == 20) { // a fresh session every 20 frames (badge team); opening loads the whole frame
-        if (ui_n == 20) epd_close();
-        epd_open(fb, NULL, true);
-        ui_n = 0;
-    } else {
-        epd_load_rows(fb, y0, y1);
-    }
-    CMD(BOTH, 0x90, 0x00, 0x3B, MAX(0, y0 / 4 - 1), MIN(0xA9, y1 / 4 + 3)); // DRFW, 4-line units, 1-unit margin
-    int t = epd_pull(pulls, 5000);
-    ui_n++;
-    ESP_LOGI(TAG, "frame: rows %d-%d, %d pull(s), %d ms", y0, y1, pulls, t);
+    (void)pulls; // ponytail: kept so apps build; a partial update is one pull whatever was asked
+    epd_partial(fb);
 }
 
-// Fast frames leave the old picture behind; driving every pixel black, then white, before a new scene
-// takes most of it off. The full cure is the 35 s clean refresh (DEVICE_INFO.md, ghosting).
+// Partial updates leave light ghosts of erased ink; a scene change shakes the film with the short black/white
+// waveform (all black, then all white, ~2.8 s) and leaves the panel and the driver agreeing on white.
 void ui_wipe(void)
 {
+    epd_sleep();
     memset(fb, 0xFF, sizeof fb);
-    ui_frame(1);
+    epd_open(fb, NULL);
+    epd_pull(1, 5000);
+    epd_load(NULL, NULL, true); // both planes: after the pull 0x11 holds the black frame, which would select red
+    epd_pull(1, 5000);
+    epd_close();
     memset(fb, 0, sizeof fb);
-    ui_frame(1);
+    memset(part_shown, 0, sizeof part_shown);
 }
 
-void ui_close(void)
-{
-    if (ui_n >= 0) epd_close();
-    ui_n = -1;
-}
+void ui_close(void) { epd_sleep(); }
 
 // ---- Buttons, active low with pull-ups, polled every 20 ms; each new press goes into a queue.
 static QueueHandle_t btnq;
@@ -707,18 +827,6 @@ void app_main(void)
     ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
 
-    // First boot of badge os on this badge: one slow 3-colour refresh to white, because the fast waveform
-    // cannot take red (an old nametag) off the film. ~35 s, once.
-    nvs_handle_t nvs;
-    uint8_t clean = 0;
-    ESP_ERROR_CHECK(nvs_open("os", NVS_READWRITE, &nvs));
-    nvs_get_u8(nvs, "clean", &clean);
-    if (!clean) {
-        epd_open(NULL, NULL, false);
-        epd_pull(1, 120000);
-        epd_close();
-        nvs_set_u8(nvs, "clean", 1);
-        nvs_commit(nvs);
-    }
+    ui_wipe(); // the film still shows whatever ran before the reset; partial updates need a known start
     home();
 }

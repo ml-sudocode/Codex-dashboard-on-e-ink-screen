@@ -26,14 +26,14 @@
 - On the home screen the badge must always be flashable over USB: an app that installs the USB host and returns
   gets the badge restarted by the OS (better: restart it yourself when you are done).
 - The OS has closed its panel session when your app starts. Draw into `fb` (960x672, 1 bit, 1 = black) with
-  `box`, `outline`, `text`, then `ui_frame(pulls)`. Use 3 pulls for a clean first picture, 1 afterwards.
+  `box`, `outline`, `text`, then `ui_frame(1)` (the pulls argument is ignored now). The screen starts white.
   `ui_close()` when the screen will sit still.
 - Buttons: `btn_get(timeout_ms)` returns `BTN_PLUS`, `BTN_MINUS`, `BTN_A`, `BTN_B` (as printed; 2x2 block:
   MENU + top left, MENU - top right, A bottom left, B bottom right), or -1. The press that opened your app has
   been flushed.
 
 ## The panel (measured; the full story with pins and timings is in DEVICE_INFO.md)
-- A fast frame is plane data + one ~1.07 s pull, black/white only, and the whole panel flashes. A slow 3-colour
-  refresh is 35 s. Red cannot be drawn or removed in fast mode. `ui_frame` starts a fresh panel session every
-  20 frames (~5 s extra) as the badge team's driver does.
-- Partial, no-flash updates are being researched in `~/Documents/hackaday26/panel_lab`; they are not in the OS yet.
+- `ui_frame` is a calm partial update (panel_lab's driver): ~0.48 s however much changed, only changed pixels
+  move, nothing flashes. ~2 frames/s is the hardware floor. Ink is dark red, erased ink leaves a light ghost.
+  No red. A fresh panel session every 60 frames costs ~0.5 s. `ui_wipe()` (~2.8 s) shakes the ghosts off.
+- Never run the slow 3-colour refresh (~35 s): the owner does not want it on the badge.
