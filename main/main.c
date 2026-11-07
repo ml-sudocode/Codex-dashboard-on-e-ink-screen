@@ -662,7 +662,9 @@ int knob_angle(void)
                                   &knob);
         ESP_LOGI(TAG, "AS5600 knob found");
     }
-    uint8_t reg = 0x0C, d[2]; // RAW ANGLE, 12 bits, high byte first
+    uint8_t reg = 0x0B, d[2]; // STATUS: without a magnet (MD, bit 5) RAW ANGLE is noise, so there is no knob
+    if (i2c_master_transmit_receive(knob, &reg, 1, d, 1, 20) != ESP_OK || !(d[0] & 0x20)) return -1;
+    reg = 0x0C; // RAW ANGLE, 12 bits, high byte first
     if (i2c_master_transmit_receive(knob, &reg, 1, d, 2, 20) != ESP_OK) return -1;
     return (d[0] & 0x0F) << 8 | d[1];
 }
