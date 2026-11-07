@@ -1,7 +1,7 @@
 // Gallery: the featured image of each post in hackaday.com's RSS feed, one at a time, 15 s each, title underneath.
 // Wi-Fi stays joined for the session (ranging is off until the badge goes home). The feed is read once into PSRAM,
 // only titles and image URLs are kept; each image is downloaded (the WordPress resizer fits it to the screen) and
-// decoded with stb_image (the resizer only serves progressive JPEGs: the ROM TJpgDec can't read them), then dithered
+// decoded with stb_image (JPEG, PNG) (the resizer only serves progressive JPEGs: the ROM TJpgDec can't read them), then dithered
 // to 1 bit. The next image loads while the current one shows.
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +18,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
-#define STBI_ONLY_GIF
 #define STBI_NO_STDIO
 #define STBI_ASSERT(x)
 #define STBI_MALLOC(n) heap_caps_malloc(n, MALLOC_CAP_SPIRAM)
@@ -79,7 +78,7 @@ static void parse(void)
         if (!(e = strstr(s, "</item>"))) break;
         const char *t = strstr(s, "<title>"), *te = t ? strstr(t, "</title>") : NULL;
         const char *u = strstr(s, "<media:content url=\""), *ue = u ? strpbrk(u + 20, "?\"") : NULL;
-        if (!te || !ue || ue > e) continue;
+        if (!te || !ue || ue > e || !strncmp(ue - 4, ".gif", 4)) continue; // ponytail: no GIFs (animations, ~600 KB, and stb's GIF loader needs ~34 KB of stack)
         clean(posts[nposts].title, sizeof posts->title, t + 7, te);
         snprintf(posts[nposts].url, sizeof posts->url, "%.*s?fit=%d,%d&quality=60", (int)(ue - u - 20), u + 20, W, IH);
         nposts++;
