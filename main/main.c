@@ -1087,39 +1087,39 @@ static void home(void)
 {
     ui_keys("< Left", "Right >", "Open", "Open");
     btn_flush();
-    for (int sel = 0, pulls = 3;;) {
+    for (int sel = 0, first = 1;;) {
         draw_home(sel);
-        ui_frame(pulls);
-        btn_flush(); // presses made while the screen was still catching up would move past what you see: A opens what is shown
-        if (pulls == 3) esp_ota_mark_app_valid_cancel_rollback(); // this version boots: keep it (rollback)
-        pulls = 1;
-        int b = btn_get(10000);
+        ui_frame(1);
+        if (first) esp_ota_mark_app_valid_cancel_rollback(), first = 0; // this version boots: keep it (rollback)
+        int b = btn_get(10000), open = 0;
         if (b < 0) { // the screen sits still: end the panel session, then wait as long as it takes
             ui_close();
             b = btn_get(-1);
         }
-        ESP_LOGI(TAG, "home: button %d on %s", b, apps[sel].name);
-        if (b == BTN_PLUS) sel = (sel + NAPPS - 1) % NAPPS; // MENU + is the left one: move left
-        else if (b == BTN_MINUS) sel = (sel + 1) % NAPPS; // MENU - is the right one: move right
-        else {
-            ESP_LOGI(TAG, "opening %s", apps[sel].name);
-            ui_wipe(); // the home screen would ghost through the app's first frame
-            ui_close();
-            btn_flush();
-            bar_app = apps[sel].name;
-            ui_keys(NULL, NULL, NULL, NULL);
-            in_app = true;
-            apps[sel].run();
-            in_app = false;
-            bar_app = "Home";
-            ui_keys("< Left", "Right >", "Open", "Open");
-            usb_host_lib_info_t usb;
-            if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
-            if (!rng_run) wifi_off(), ranging_start(); // the app took the radio: ranging gets it back
-            ui_wipe(); // and the app through the home screen
-            btn_flush();
-            pulls = 3;
+        // Every press counts at once, also those made during the last refresh; the next frame shows where they led.
+        for (; b >= 0 && !open; b = btn_get(0)) {
+            ESP_LOGI(TAG, "home: button %d on %s", b, apps[sel].name);
+            if (b == BTN_PLUS) sel = (sel + NAPPS - 1) % NAPPS; // MENU + is the left one: move left
+            else if (b == BTN_MINUS) sel = (sel + 1) % NAPPS; // MENU - is the right one: move right
+            else open = 1;
         }
+        if (!open) continue;
+        ESP_LOGI(TAG, "opening %s", apps[sel].name);
+        ui_wipe(); // the home screen would ghost through the app's first frame
+        ui_close();
+        btn_flush();
+        bar_app = apps[sel].name;
+        ui_keys(NULL, NULL, NULL, NULL);
+        in_app = true;
+        apps[sel].run();
+        in_app = false;
+        bar_app = "Home";
+        ui_keys("< Left", "Right >", "Open", "Open");
+        usb_host_lib_info_t usb;
+        if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
+        if (!rng_run) wifi_off(), ranging_start(); // the app took the radio: ranging gets it back
+        ui_wipe(); // and the app through the home screen
+        btn_flush();
     }
 }
 
