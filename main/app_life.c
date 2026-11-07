@@ -1,4 +1,4 @@
-// Conway's Game of Life: 60 x 42 = 2520 cells of 16 px on the whole panel, edges wrap around. Nobody plays: a random
+// Conway's Game of Life: 60 x 39 = 2340 cells of 16 px below the top bar, edges wrap around. Nobody plays: a random
 // soup runs one generation per frame (~0.5 s) until it dies out, settles (same as 1 or 2 generations ago) or hits
 // MAX_GEN, then a fresh soup starts after a wipe. Any button goes home.
 #include <string.h>
@@ -7,7 +7,7 @@
 
 #define CELL 16
 #define GW (W / CELL)
-#define GH (H / CELL)
+#define GH ((H - TOP) / CELL)
 #define MAX_GEN 500 // ponytail: a cap instead of cycle detection beyond period 2 (gliders on a torus run forever)
 
 static uint8_t g[3][GH][GW]; // this generation, the one before, the one before that
@@ -35,7 +35,7 @@ void app_life(void)
             memset(fb, 0, sizeof fb);
             for (int y = 0; y < GH; y++)
                 for (int x = 0; x < GW; x++)
-                    if (g[0][y][x]) box(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2, true);
+                    if (g[0][y][x]) box(x * CELL + 1, TOP + y * CELL + 1, CELL - 2, CELL - 2, true);
             ui_frame(1);
             if (btn_get(0) >= 0) return;
             step();

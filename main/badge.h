@@ -6,6 +6,7 @@
 #define W 960
 #define H 672
 #define PLANE (W * H / 8) // MONO_HLSB, MSB = leftmost pixel, 1 = black
+#define TOP 48 // rows 0..TOP-1 are the OS top bar in apps (name, version, battery): ui_frame draws over them
 
 extern uint8_t fb[PLANE]; // what the next ui_frame() shows
 void ms(int t);           // sleep at least t ms

@@ -495,9 +495,13 @@ void text(int x, int y, int scale, const char *s, bool ink)
 }
 
 // ---- Panel frames: apps draw into fb, ui_frame shows it with one calm partial update (only changed pixels move).
+static const char *bar_app; // the running app's name for the top bar, NULL on the home screen
+static void draw_bar(void);
+
 void ui_frame(int pulls)
 {
     (void)pulls; // ponytail: kept so apps build; a partial update is one pull whatever was asked
+    if (bar_app) draw_bar();
     epd_partial(fb);
 }
 
@@ -700,9 +704,8 @@ int battery_pct(void)
     return 100;
 }
 
-static void draw_battery(int x, int y) // a battery outline, filled to the charge, then "87%" or "USB"
+static void draw_battery(int x, int y, int pct) // a battery outline, filled to the charge, then "87%" or "USB"
 {
-    int pct = battery_pct();
     if (pct == -2) return;
     char s[16] = "USB";
     if (pct >= 0) snprintf(s, sizeof s, "%d%%", pct);
@@ -710,6 +713,27 @@ static void draw_battery(int x, int y) // a battery outline, filled to the charg
     box(x + 48, y + 7, 4, 10, true);
     box(x + 5, y + 5, pct < 0 ? 38 : 38 * pct / 100, 14, true);
     text(x + 64, y, 3, s, true);
+}
+
+// ---- Top bar in apps (rows 0..TOP-1): app name left, "badge os vX.X" and battery right, a rule under it.
+// ui_frame draws it over fb, so whatever an app puts in those rows is covered.
+static void draw_bar(void)
+{
+    static int pct = -2;
+    static int64_t next;
+    if (esp_timer_get_time() >= next) { // every 30 s, so the bar sits still; a failed read (Wi-Fi busy) keeps the last
+        int p = battery_pct();
+        if (p != -2) pct = p;
+        next = esp_timer_get_time() + 30000000;
+    }
+    char ver[48];
+    snprintf(ver, sizeof ver, "badge os v%s", esp_app_get_description()->version);
+    int bx = W - 24 - 64 - 4 * 24; // the battery, as on the home screen
+    box(0, 0, W, TOP, false);
+    text(24, 12, 3, bar_app, true);
+    text(bx - 32 - (int)strlen(ver) * 16, 16, 2, ver, true);
+    draw_battery(bx, 12, pct);
+    box(0, TOP - 4, W, 2, true);
 }
 
 // ---- Home screen: iOS-style grid of icons. MENU + / MENU - move left / right, A or B opens the app.
@@ -788,7 +812,7 @@ static void draw_home(int sel)
         if (i == sel) outline(x - 16, y - 16, ICON + 32, ICON + 32, 8);
     }
     text(W - (int)strlen(ver) * 24 - 24, H - 48, 3, ver, true);
-    draw_battery(W - 24 - 64 - 4 * 24, 24);
+    draw_battery(W - 24 - 64 - 4 * 24, 24, battery_pct());
 }
 
 static void home(void)
@@ -811,7 +835,9 @@ static void home(void)
             ui_wipe(); // the home screen would ghost through the app's first frame
             ui_close();
             btn_flush();
+            bar_app = apps[sel].name;
             apps[sel].run();
+            bar_app = NULL;
             usb_host_lib_info_t usb;
             if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
             wifi_off(); // whatever the app turned on is off again at home

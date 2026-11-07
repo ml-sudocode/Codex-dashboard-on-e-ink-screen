@@ -29,6 +29,8 @@
 - The OS has closed its panel session when your app starts. Draw into `fb` (960x672, 1 bit, 1 = black) with
   `box`, `outline`, `text`, then `ui_frame(1)` (the pulls argument is ignored now). The screen starts white.
   `ui_close()` when the screen will sit still.
+- Rows 0..`TOP`-1 (48 px) are the OS top bar (app name, OS version, battery); `ui_frame` draws it over `fb`.
+  Keep your picture below `TOP`.
 - Buttons: `btn_get(timeout_ms)` returns `BTN_PLUS`, `BTN_MINUS`, `BTN_A`, `BTN_B` (as printed; 2x2 block:
   MENU + top left, MENU - top right, A bottom left, B bottom right), or -1. The press that opened your app has
   been flushed.
