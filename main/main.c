@@ -753,6 +753,13 @@ static void icon_snake(int x, int y) // a snake of white squares heading for a d
     box(x + 5 * 24 + 8, y + 5 * 24 + 8, 8, 8, false); // food
 }
 
+static void icon_life(int x, int y) // a glider
+{
+    icon_base(x, y);
+    static const int cells[][2] = {{1, 0}, {2, 1}, {0, 2}, {1, 2}, {2, 2}};
+    for (int i = 0; i < 5; i++) box(x + 28 + cells[i][0] * 40 + 2, y + 28 + cells[i][1] * 40 + 2, 36, 36, false);
+}
+
 typedef struct {
     const char *name;
     void (*icon)(int x, int y);
@@ -763,6 +770,7 @@ static const app_t apps[] = {
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
     {"Snake", icon_snake, app_snake},
+    {"Life", icon_life, app_life},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
