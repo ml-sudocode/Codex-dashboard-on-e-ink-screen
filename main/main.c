@@ -655,7 +655,7 @@ void wifi_off(void)
 // in APSTA mode, the hidden SoftAP being this badge's FTM responder. Research: badge_os-radar RADAR_RESEARCH.md.
 #define RNG_CH 1
 #define RNG_FRAMES 16       // FTM frames per burst (API: 0, 16, 24, 32, 64; S3 reports said > 8 often fails: to test)
-#define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: calibrate on our badges (S3 reports: 4000-6400)
+#define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (owner checked side by side, v6.0.2)
 #define RNG_KEEP 32         // ranges kept, own and shared
 #define RNG_SHARE 8         // own ranges per beacon
 #define RNG_STALE_US 30000000LL // a pair not heard of for 30 s is dropped
