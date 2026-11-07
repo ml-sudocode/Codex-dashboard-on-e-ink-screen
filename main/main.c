@@ -326,7 +326,7 @@ static void epd_init(void)
 #define PART_DRIVE 10 // frames of VDH/VDL per change (of 20 per pull): 10 for the film's health (owner); 6 is the least that reads clearly
 _Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 19, "the pull has 20 frames and the last one must be GND");
 
-static uint8_t part_shown[PLANE]; // what the film shows; after every pull the CoG's 0x11 holds the same
+static EXT_RAM_BSS_ATTR uint8_t part_shown[PLANE]; // what the film shows; after every pull the CoG's 0x11 holds the same
 static int part_prev[2][4];       // per CoG, the byte box {x0, x1, y0, y1} the last pull changed; x1 < x0: none
 static int part_n = -1;           // pulls in the open partial session, -1 = no session
 
@@ -469,7 +469,7 @@ static void epd_partial(const uint8_t *black)
 }
 
 // ---- Drawing into fb
-uint8_t fb[PLANE];
+EXT_RAM_BSS_ATTR uint8_t fb[PLANE]; // in PSRAM: internal RAM is needed for Wi-Fi and TLS (Online update)
 
 void box(int x, int y, int w, int h, bool ink)
 {
