@@ -1043,6 +1043,7 @@ static void home(void)
     for (int sel = 0, pulls = 3;;) {
         draw_home(sel);
         ui_frame(pulls);
+        btn_flush(); // presses made while the screen was still catching up would move past what you see: A opens what is shown
         if (pulls == 3) esp_ota_mark_app_valid_cancel_rollback(); // this version boots: keep it (rollback)
         pulls = 1;
         int b = btn_get(10000);
@@ -1050,6 +1051,7 @@ static void home(void)
             ui_close();
             b = btn_get(-1);
         }
+        ESP_LOGI(TAG, "home: button %d on %s", b, apps[sel].name);
         if (b == BTN_PLUS) sel = (sel + NAPPS - 1) % NAPPS; // MENU + is the left one: move left
         else if (b == BTN_MINUS) sel = (sel + 1) % NAPPS; // MENU - is the right one: move right
         else {
