@@ -45,3 +45,4 @@ void app_life(void);
 void app_aliens(void);
 void app_blocks(void);
 void app_rocks(void);
+void app_radar(void);

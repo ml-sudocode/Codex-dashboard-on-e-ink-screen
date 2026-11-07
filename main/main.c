@@ -812,6 +812,19 @@ static void icon_rocks(int x, int y) // a little ship among rocks
     box(x + 36, y + 124, 20, 20, false);
 }
 
+static void icon_radar(int x, int y) // rings, a sweep line and two blips
+{
+    icon_base(x, y);
+    int c = ICON / 2;
+    for (int r = 0; r < ICON; r++)
+        for (int k = 0; k < ICON; k++) {
+            int d2 = (k - c) * (k - c) + (r - c) * (r - c);
+            if ((d2 > 66 * 66 && d2 < 70 * 70) || (d2 > 42 * 42 && d2 < 46 * 46) || d2 < 6 * 6) box(x + k, y + r, 1, 1, false);
+        }
+    for (int t = 0; t < 48; t++) box(x + c + t, y + c - t, 4, 4, false); // sweep, to the top right
+    box(x + c - 52, y + c - 20, 12, 12, false), box(x + c + 20, y + c + 36, 12, 12, false);
+}
+
 typedef struct {
     const char *name;
     void (*icon)(int x, int y);
@@ -826,6 +839,7 @@ static const app_t apps[] = {
     {"Aliens", icon_aliens, app_aliens},
     {"Blocks", icon_blocks, app_blocks},
     {"Rocks", icon_rocks, app_rocks},
+    {"Radar", icon_radar, app_radar}, // 8 icons fill the home screen: a 9th app needs a second page
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 

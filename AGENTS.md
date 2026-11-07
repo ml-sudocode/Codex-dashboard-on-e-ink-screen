@@ -11,6 +11,7 @@
   - `app-aliens`: `main/app_aliens.c`
   - `app-blocks`: `main/app_blocks.c`
   - `app-rocks`: `main/app_rocks.c`
+  - `app-radar`: `main/app_radar.c`
 
 ## Rules for app agents
 - Work in your own git worktree on your own branch (`~/Documents/hackaday26/badge_os-<app>`, branch `app/<app>`).
