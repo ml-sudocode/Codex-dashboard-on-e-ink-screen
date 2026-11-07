@@ -1,2 +1,3 @@
 dependencies:
   espressif/esp-serial-flasher: "^2"
+  espressif/qrcode: "^0.1"
