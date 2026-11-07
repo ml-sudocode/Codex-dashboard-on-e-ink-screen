@@ -1,4 +1,4 @@
-// Snake: 20 x 14 grid of 48 px cells, a move every MOVE_MS, walls wrap around. Nonstop: after the snake bites
+// Snake: 20 x 13 grid of 48 px cells, a move every MOVE_MS, walls wrap around. Nonstop: after the snake bites
 // itself its length shows for 3 s, then a new game starts by itself. MENU - turns clockwise, MENU + counter-
 // clockwise; presses queue, one turn per move. The AS5600 knob add-on steers too: an eighth of a turn either way
 // is one turn. A reboot goes home.
@@ -14,7 +14,7 @@
 
 #define CELL 48
 #define GW (W / CELL)
-#define GH (H / CELL)
+#define GH ((H - TOP) / CELL) // 13 rows below the OS top bar
 #define N (GW * GH)
 #define MOVE_MS 350   // the game speed
 #define KNOB_STEP 512 // knob: an eighth of a turn turns the snake once
@@ -28,7 +28,7 @@ static TaskHandle_t drawer;
 
 static void fill_cell(int c, int inset, bool ink)
 {
-    box(c % GW * CELL + inset, c / GW * CELL + inset, CELL - 2 * inset, CELL - 2 * inset, ink);
+    box(c % GW * CELL + inset, TOP + c / GW * CELL + inset, CELL - 2 * inset, CELL - 2 * inset, ink);
 }
 
 static int draw(void) // board -> fb; returns the length shown in the crash box, 0 for none
