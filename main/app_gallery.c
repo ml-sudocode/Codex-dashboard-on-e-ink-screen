@@ -15,15 +15,7 @@
 #include "esp_timer.h"
 #include "badge.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_PNG
-#define STBI_NO_STDIO
-#define STBI_ASSERT(x)
-#define STBI_MALLOC(n) heap_caps_malloc(n, MALLOC_CAP_SPIRAM)
-#define STBI_REALLOC(p, n) heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM)
-#define STBI_FREE(p) heap_caps_free(p)
-#include "stb_image.h"
+#include "stb_image.h" // implementation: main/stb_image.c
 
 #define FEED "https://hackaday.com/blog/feed/"
 #define CAP (1536 * 1024) // download buffer in PSRAM: the feed (~100-300 KB) and each image (JPEG 10-110 KB, PNG/GIF up to ~600 KB)

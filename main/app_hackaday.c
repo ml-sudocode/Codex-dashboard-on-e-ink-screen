@@ -13,7 +13,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "badge.h"
-#include "stb_image.h" // the implementation lives in app_gallery.c (PSRAM allocations)
+#include "stb_image.h" // implementation: main/stb_image.c
 
 #define CAP (1024 * 1024) // feed buffer in PSRAM; Hackaday's feed carries full post bodies (~100-300 KB)
 #define JCAP (768 * 1024) // one image (resized JPEGs are ~40 KB; other PNGs and GIFs can be big), or the gzipped feed
