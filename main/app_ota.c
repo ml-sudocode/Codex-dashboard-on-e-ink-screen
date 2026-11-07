@@ -11,6 +11,7 @@
 #include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "badge.h"
 
 #define URL "https://github.com/yigitabi5444/supercon26-badge-os/releases/latest/download/badge_os.bin"
@@ -37,47 +38,106 @@ static bool newer(const char *a, const char *b)
     return false;
 }
 
-// The screen is a log: every message goes on the next empty line. Fast refreshes leave the old picture
-// faintly behind, so text is never written over other text.
-static int y;
+// The screen is a log: every message goes on the next empty line, never text over text (erased ink ghosts).
+// A draw task owns the panel and shows the latest log, so the network never waits for a refresh.
+static struct {
+    char s[64];
+    int scale; // 0: the progress bar
+} lines[8];
+static volatile int nlines, pct, want, shown;
+static volatile bool stop;
+
+static void draw_task(void *caller)
+{
+    ui_wipe(); // we come right after the Update chooser; runs while Wi-Fi joins
+    for (;;) {
+        int g = want;
+        memset(fb, 0, sizeof fb);
+        for (int i = 0, y = TOP + 24; i < nlines; i++) {
+            if (lines[i].scale) {
+                text(48, y, lines[i].scale, lines[i].s, true);
+                y += 8 * lines[i].scale + 24;
+            } else {
+                outline(48, y, 864, 64, 6);
+                box(60, y + 12, 840 * pct / 100, 40, true); // only grows: ink is added, never erased
+                y += 64 + 24;
+            }
+        }
+        ui_frame(1);
+        shown = g;
+        if (stop && shown == want) break;
+        if (want == g) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+    ui_close();
+    xTaskNotifyGive(caller);
+    vTaskDelete(NULL);
+}
+
+static TaskHandle_t drawer;
+
+static void redraw(void)
+{
+    want++;
+    xTaskNotifyGive(drawer);
+}
 
 static void say(int scale, const char *l)
 {
-    text(48, y, scale, l, true);
-    y += 8 * scale + 24;
+    if (nlines == sizeof lines / sizeof *lines) return;
+    snprintf(lines[nlines].s, sizeof lines[0].s, "%s", l);
+    lines[nlines].scale = scale;
+    nlines++;
+    redraw();
+}
+
+static void finish_screen(void) // show the last lines, then the draw task ends
+{
+    stop = true;
+    redraw();
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 static void done(const char *l1, const char *l2) // final message, then back on any button
 {
+    ui_keys("Back", "Back", "Back", "Back"); // any button
     say(4, l1);
     if (l2) say(3, l2);
-    ui_keys("Back", "Back", "Back", "Back"); // any button
-    ui_frame(1);
-    ui_close();
+    finish_screen();
     btn_flush();
     btn_get(-1);
+}
+
+static int64_t t0;
+
+static void lap(const char *what) // timings on the log, to see where the time goes
+{
+    int64_t t = esp_timer_get_time();
+    ESP_LOGI("ota", "%s: %lld ms", what, (t - t0) / 1000);
+    t0 = t;
 }
 
 static void run(void)
 {
     const char *ours = esp_app_get_description()->version;
     char s[64];
-    snprintf(s, sizeof s, "This badge: v%s", ours);
-    ui_wipe(); // we come right after another app's screen
-    memset(fb, 0, sizeof fb);
-    y = TOP + 24; // below the OS top bar
+    nlines = pct = want = shown = 0;
+    stop = false;
+    xTaskCreate(draw_task, "ota draw", 4096, xTaskGetCurrentTaskHandle(), 5, &drawer);
     say(6, "Online update");
+    snprintf(s, sizeof s, "This badge: v%s", ours);
     say(3, s);
     say(4, "Checking for updates...");
-    ui_frame(3);
 
-    if (!wifi_connect(20000)) return done("No Wi-Fi.", "Could not join the badge network.");
+    t0 = esp_timer_get_time();
+    bool joined = wifi_connect(20000);
+    lap("wifi_connect");
+    if (!joined) return done("No Wi-Fi.", "Could not join the badge network.");
 
     esp_http_client_config_t http = {
         .url = URL,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .event_handler = on_http,
-        .buffer_size = 4096, // GitHub redirects to a very long objects URL
+        .buffer_size = 16384, // big reads for the download; also holds GitHub's very long redirect URL
         .buffer_size_tx = 4096,
         .timeout_ms = 15000,
         .keep_alive_enable = true,
@@ -85,6 +145,7 @@ static void run(void)
     esp_https_ota_handle_t h;
     status = 0;
     esp_err_t err = esp_https_ota_begin(&(esp_https_ota_config_t){.http_config = &http}, &h);
+    lap("esp_https_ota_begin");
     if (err != ESP_OK) {
         ESP_LOGE("ota", "begin: %s, HTTP %d", esp_err_to_name(err), status);
         if (status == 404) return done("No release yet.", "Nothing to install.");
@@ -101,35 +162,33 @@ static void run(void)
         return done("Badge is up to date.", s);
     }
 
-    // Download: the bar grows (only black is added), one frame per 10 %; the download waits during each pull.
     snprintf(s, sizeof s, "Updating to v%s", img.version);
     say(4, s);
-    int bar = y;
-    outline(48, bar, 864, 64, 6);
-    y += 64 + 24;
-    int size = esp_https_ota_get_image_size(h), shown = -10;
+    say(0, ""); // the bar
+    int size = esp_https_ota_get_image_size(h);
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int p = size > 0 ? (long long)esp_https_ota_get_image_len_read(h) * 100 / size : 0;
-        if (p >= shown + 10) {
-            box(60, bar + 12, 840 * p / 100, 40, true);
-            ui_frame(1);
-            shown = p;
+        if (p != pct) {
+            pct = p;
+            redraw();
         }
     }
+    snprintf(s, sizeof s, "download (%d bytes)", esp_https_ota_get_image_len_read(h));
+    lap(s);
     if (err == ESP_OK && esp_https_ota_is_complete_data_received(h)) err = esp_https_ota_finish(h);
     else {
         if (err == ESP_OK) err = ESP_FAIL;
         esp_https_ota_abort(h);
     }
+    lap("finish");
     if (err != ESP_OK) {
         ESP_LOGE("ota", "download: %s", esp_err_to_name(err));
         return done("Update failed.", esp_err_to_name(err));
     }
 
+    pct = 100;
     say(4, "Installed. Restarting.");
-    ui_frame(1);
-    ui_close();
-    ms(2000);
+    finish_screen();
     esp_restart();
 }
 
