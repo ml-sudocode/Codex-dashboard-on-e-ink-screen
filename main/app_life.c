@@ -28,6 +28,7 @@ static void step(void)
 
 void app_life(void)
 {
+    ui_keys(NULL, NULL, "Home", "Home");
     for (;;) {
         for (int y = 0; y < GH; y++)
             for (int x = 0; x < GW; x++) g[0][y][x] = esp_random() % 100 < 30; // 30 % alive

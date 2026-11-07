@@ -46,6 +46,7 @@ void app_source(void)
 {
     enum { N = 33, M = 13 }; // modules, px per module: 429 px square
     int x0 = (W - N * M) / 2, y0 = TOP + 48;
+    ui_keys(NULL, NULL, "Home", "Home");
     memset(fb, 0, sizeof fb);
     for (int y = 0; y < N; y++)
         for (int x = 0; x < N; x++)
@@ -53,5 +54,5 @@ void app_source(void)
     text((W - (int)strlen(URL) * 16) / 2, y0 + N * M + 40, 2, URL, true);
     ui_frame(1);
     ui_close();
-    btn_get(-1);
+    btn_get(-1); // any button: home
 }

@@ -500,20 +500,31 @@ void text(int x, int y, int scale, const char *s, bool ink)
 }
 
 // ---- Panel frames: apps draw into fb, ui_frame shows it with one calm partial update (only changed pixels move).
-static const char *bar_app; // the running app's name for the top bar, NULL on the home screen
+static const char *bar_app = "Home"; // the name in the top bar
+static const char *keys[4];           // ui_keys: what BTN_PLUS, BTN_MINUS, BTN_A, BTN_B do now
+static volatile bool in_app;          // an app is running: MENU + and MENU - held together go home
+static SemaphoreHandle_t panel_lock;  // one panel user at a time; going home waits for the frame in flight
 static void draw_bar(void);
+
+void ui_keys(const char *plus, const char *minus, const char *a, const char *b)
+{
+    keys[BTN_PLUS] = plus, keys[BTN_MINUS] = minus, keys[BTN_A] = a, keys[BTN_B] = b;
+}
 
 void ui_frame(int pulls)
 {
     (void)pulls; // ponytail: kept so apps build; a partial update is one pull whatever was asked
-    if (bar_app) draw_bar();
+    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    draw_bar();
     epd_partial(fb);
+    xSemaphoreGive(panel_lock);
 }
 
 // Partial updates leave light ghosts of erased ink; a scene change shakes the film with the short black/white
 // waveform (all black, then all white, ~2.8 s) and leaves the panel and the driver agreeing on white.
 void ui_wipe(void)
 {
+    xSemaphoreTake(panel_lock, portMAX_DELAY);
     epd_sleep();
     memset(fb, 0xFF, sizeof fb);
     epd_open(fb, NULL);
@@ -523,9 +534,25 @@ void ui_wipe(void)
     epd_close();
     memset(fb, 0, sizeof fb);
     memset(part_shown, 0, sizeof part_shown);
+    xSemaphoreGive(panel_lock);
 }
 
-void ui_close(void) { epd_sleep(); }
+void ui_close(void)
+{
+    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    epd_sleep();
+    xSemaphoreGive(panel_lock);
+}
+
+// MENU + and MENU - held together in an app: home, by a restart (apps never return by themselves), between frames
+// so the panel is never cut off mid-refresh.
+static void go_home(void)
+{
+    ESP_LOGI(TAG, "MENU + and MENU - held: going home");
+    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    epd_sleep();
+    esp_restart();
+}
 
 // ---- Buttons, active low with pull-ups, polled every 20 ms; each new press goes into a queue.
 static QueueHandle_t btnq;
@@ -536,12 +563,14 @@ static void buttons(void *arg)
     static const int pin[4] = {40, 15, 39, 16}; // BTN_PLUS, BTN_MINUS, BTN_A, BTN_B (GPIOs of the printed names)
     gpio_config(&(gpio_config_t){.pin_bit_mask = BIT64(40) | BIT64(15) | BIT64(39) | BIT64(16), .mode = GPIO_MODE_INPUT,
                                  .pull_up_en = GPIO_PULLUP_ENABLE});
-    for (int was = 0;; ms(20)) {
+    for (int was = 0, both = 0;; ms(20)) {
         int now = 0;
         for (int k = 0; k < 4; k++) now |= (!gpio_get_level(pin[k])) << k;
         for (int k = 0; k < 4; k++)
             if (now & ~was & 1 << k) xQueueSend(btnq, &k, 0);
         held = was = now;
+        both = (now & 3) == 3 ? both + 20 : 0; // MENU + and MENU - together, held 0.4 s so a game cannot slip into it
+        if (both == 400 && in_app) go_home();
     }
 }
 
@@ -581,6 +610,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 void wifi_on(void)
 {
+    ranging_stop(); // an app that wants the radio gets it: ranging is back at the next home screen / reboot
     if (!wifi_ev) { // the driver is set up once and kept; on/off only starts and stops the radio
         wifi_ev = xEventGroupCreate();
         ESP_ERROR_CHECK(esp_netif_init());
@@ -867,51 +897,48 @@ int battery_pct(void)
         adc_cali_create_scheme_curve_fitting(&(adc_cali_curve_fitting_config_t){.unit_id = unit, .chan = ch,
                                                                                 .atten = ADC_ATTEN_DB_12}, &cali);
     }
+    static int last = -2; // a failed read (ADC2 is shared with Wi-Fi, which ranging keeps busy) returns the last good one
     int mv, sum = 0;
     for (int k = 0; k < 8; k++) {
-        if (!cali || adc_oneshot_get_calibrated_result(adc, cali, ch, &mv) != ESP_OK) return -2;
+        if (!cali || adc_oneshot_get_calibrated_result(adc, cali, ch, &mv) != ESP_OK) return last;
         sum += mv;
     }
     int vin = sum / 8 * 2;
-    if (vin > 4400) return -1;
+    if (vin > 4400) return last = -1;
     // ponytail: a typical LiPo rest-voltage curve, not this badge's cell; good to ~10 %
     static const int v[] = {3300, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200};
     static const int p[] = {0, 3, 10, 25, 45, 62, 77, 90, 100};
-    if (vin <= v[0]) return 0;
+    if (vin <= v[0]) return last = 0;
     for (int i = 1; i < 9; i++)
-        if (vin < v[i]) return p[i - 1] + (p[i] - p[i - 1]) * (vin - v[i - 1]) / (v[i] - v[i - 1]);
-    return 100;
+        if (vin < v[i]) return last = p[i - 1] + (p[i] - p[i - 1]) * (vin - v[i - 1]) / (v[i] - v[i - 1]);
+    return last = 100;
 }
 
-static void draw_battery(int x, int y, int pct) // a battery outline, filled to the charge, then "87%" or "USB"
-{
-    if (pct == -2) return;
-    char s[16] = "USB";
-    if (pct >= 0) snprintf(s, sizeof s, "%d%%", pct);
-    outline(x, y, 48, 24, 3);
-    box(x + 48, y + 7, 4, 10, true);
-    box(x + 5, y + 5, pct < 0 ? 38 : 38 * pct / 100, 14, true);
-    text(x + 64, y, 3, s, true);
-}
-
-// ---- Top bar in apps (rows 0..TOP-1): app name left, "badge os vX.X" and battery right, a rule under it.
-// ui_frame draws it over fb, so whatever an app puts in those rows is covered.
+// ---- Top bar (rows 0..TOP-1) on every screen, drawn over fb by ui_frame. The buttons sit two in each top corner,
+// MENU above A on the left, MENU - above B on the right: each label (ui_keys) sits beside its button, with a tab at
+// the edge pointing at it. In the middle: the app's name, then the OS version and the battery.
 static void draw_bar(void)
 {
+    static const int ky[4] = {4, 4, 26, 26}; // label rows of BTN_PLUS, BTN_MINUS, BTN_A, BTN_B
     static int pct = -2;
     static int64_t next;
-    if (esp_timer_get_time() >= next) { // every 30 s, so the bar sits still; a failed read (Wi-Fi busy) keeps the last
-        int p = battery_pct();
-        if (p != -2) pct = p;
+    if (esp_timer_get_time() >= next) { // every 30 s, so the bar sits still
+        pct = battery_pct();
         next = esp_timer_get_time() + 30000000;
     }
-    char ver[48];
-    snprintf(ver, sizeof ver, "badge os v%s", esp_app_get_description()->version);
-    int bx = W - 24 - 64 - 4 * 24; // the battery, as on the home screen
+    char mid[48];
+    int n = snprintf(mid, sizeof mid, "badge os v%s", esp_app_get_description()->version);
+    if (pct == -1) snprintf(mid + n, sizeof mid - n, "  USB");
+    else if (pct >= 0) snprintf(mid + n, sizeof mid - n, "  %d%%", pct);
     box(0, 0, W, TOP, false);
-    text(24, 12, 3, bar_app, true);
-    text(bx - 32 - (int)strlen(ver) * 16, 16, 2, ver, true);
-    draw_battery(bx, 12, pct);
+    for (int k = 0; k < 4; k++) {
+        if (!keys[k] || !*keys[k]) continue;
+        bool left = k == BTN_PLUS || k == BTN_A;
+        box(left ? 0 : W - 6, ky[k], 6, 16, true);
+        text(left ? 14 : W - 14 - (int)strlen(keys[k]) * 16, ky[k], 2, keys[k], true);
+    }
+    text((W - (int)strlen(bar_app) * 16) / 2, 4, 2, bar_app, true);
+    text((W - (int)strlen(mid) * 16) / 2, 26, 2, mid, true);
     box(0, TOP - 4, W, 2, true);
 }
 
@@ -919,7 +946,7 @@ static void draw_bar(void)
 #define ICON 176 // icon square, px
 #define PITCH 224 // icon to icon
 #define X0 56     // (960 - 4 * 176 - 3 * 48) / 2: four icons per row
-#define Y0 72
+#define Y0 80 // below the top bar
 #define ROW 300
 
 static void icon_base(int x, int y) // black square with rounded corners
@@ -1054,11 +1081,11 @@ static void draw_home(int sel)
         if (p == page) box(x, H - 44, 16, 16, true);
         else outline(x, H - 44, 16, 16, 3);
     }
-    draw_battery(W - 24 - 64 - 4 * 24, 24, battery_pct());
 }
 
 static void home(void)
 {
+    ui_keys("< Left", "Right >", "Open", "Open");
     btn_flush();
     for (int sel = 0, pulls = 3;;) {
         draw_home(sel);
@@ -1080,11 +1107,15 @@ static void home(void)
             ui_close();
             btn_flush();
             bar_app = apps[sel].name;
+            ui_keys(NULL, NULL, NULL, NULL);
+            in_app = true;
             apps[sel].run();
-            bar_app = NULL;
+            in_app = false;
+            bar_app = "Home";
+            ui_keys("< Left", "Right >", "Open", "Open");
             usb_host_lib_info_t usb;
             if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
-            wifi_off(); // whatever the app turned on is off again at home
+            if (!rng_run) wifi_off(), ranging_start(); // the app took the radio: ranging gets it back
             ui_wipe(); // and the app through the home screen
             btn_flush();
             pulls = 3;
@@ -1105,8 +1136,11 @@ void app_main(void)
     sao_init();
     int up, down;
     ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
+    panel_lock = xSemaphoreCreateMutex();
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
 
     ui_wipe(); // the film still shows whatever ran before the reset; partial updates need a known start
+    battery_pct(); // one reading before Wi-Fi starts sharing ADC2
+    ranging_start(); // on every screen, so other badges' Radar sees this one; apps that take the radio stop it
     home();
 }

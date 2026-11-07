@@ -5,15 +5,16 @@ A small operating system for the Hackaday Supercon 2026 "Billboard Badge" (ESP32
 Apps take over the badge, and you get back home with a reboot or when an app returns.
 
 ## Features
-- **Home screen**: 8 app icons per page, battery level top right, OS version bottom right.
+- **Home screen**: 8 app icons per page, OS version bottom right.
+- **Keymap on every screen**: what each button does right now, printed beside the button.
 - **Calm partial e-paper updates**: about 0.5 s per frame, only the pixels that change move, nothing flashes.
   This is a custom waveform for the panel's two Pervasive Displays B1 controllers. The panel can't refresh faster
   than about 2 frames per second.
-- **Top bar in every app**: app name, OS version, battery.
+- **Top bar on every screen**: app name, OS version, battery, and the button labels.
 - **Online update**: pulls the latest GitHub release over Wi-Fi (OTA, with rollback if the new version doesn't
   boot).
 - **Badge-to-badge update**: one badge flashes its own firmware onto another over a USB-C cable (USB host mode).
-- **Wi-Fi only on demand**: the radio is off unless an app needs it.
+- **Wi-Fi**: the radio runs ranging in the background; an app that needs it otherwise (Pong, Online update) takes it over.
 - **Ranging service**: badges find each other with ESP-NOW and measure their distance with Wi-Fi FTM (802.11mc
   round-trip time). Each badge shares its measurements, so every badge learns the distances between the others.
 - **Add-ons**: AS5600 magnetic knob on an SAO port (I2C 0x36) as an optional controller.
@@ -30,8 +31,9 @@ Apps take over the badge, and you get back home with a reboot or when an app ret
 | Source | A QR code to this repo |
 
 ## Controls
-The four buttons form a 2x2 block. MENU + (top left) and MENU - (top right) move left and right on the home screen;
-A (bottom left) or B (bottom right) opens the app.
+The four buttons sit two in each top corner: MENU + above A on the left, MENU - above B on the right. The top bar
+shows what each one does, right beside it. On the home screen MENU + / MENU - move left / right and A or B opens
+the app. Hold MENU + and MENU - together for half a second to go back home from any app.
 
 ## Install
 Download `badge_os_full.bin` from the [latest release](https://github.com/yigitabi5444/supercon26-badge-os/releases/latest)

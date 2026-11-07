@@ -21,22 +21,29 @@ void text(int x, int y, int scale, const char *s, bool ink); // 8x8 font, 8 * sc
 // Call ui_close() when the screen will sit still for a while.
 void ui_frame(int pulls);
 void ui_close(void);
+// What each button does now, shown beside it in the top bar (two buttons in each top corner: MENU + above A on the
+// left, MENU - above B on the right). Up to ~16 characters each; NULL or "" = no label. Set it again when it changes;
+// it shows from the next ui_frame. Every app starts with no labels.
+void ui_keys(const char *plus, const char *minus, const char *a, const char *b);
 void ui_wipe(void); // scene change: an all-black then an all-white frame shake the ghosts off (~2.8 s), fb all white
 
-// Buttons as printed on the badge, a 2x2 block: MENU + top left, MENU - top right, A bottom left, B bottom right.
+// Buttons as printed on the badge, two in each top corner: MENU + above A on the left, MENU - above B on the right.
+// MENU + and MENU - held together for 0.4 s in any app go home (the OS restarts the badge between frames).
 enum { BTN_PLUS, BTN_MINUS, BTN_A, BTN_B };
 int btn_get(int timeout_ms); // next press, -1 on timeout; timeout -1 waits forever
 void btn_flush(void);
 int btn_held(void); // buttons held right now: bit (1 << BTN_x) set while pressed, updated every 20 ms
 
-// Wi-Fi is off unless an app turns it on; the home screen turns it off again when an app returns.
+// The OS runs ranging (below) on every screen. An app that calls wifi_on or wifi_connect takes the radio over:
+// ranging stops until the app returns home or the badge restarts.
 void wifi_on(void);                 // radio on, station mode, no network joined (ESP-NOW apps: set the channel next)
 bool wifi_connect(int timeout_ms); // wifi_on + join the badge Wi-Fi (main/wifi_secret.h); true once there is an IP
 void wifi_off(void);                // radio off
 // Ranging (Radar and any app): badges running badge os find each other (ESP-NOW beacons, channel 1) and measure
 // their distance with Wi-Fi FTM; each badge shares its own ranges, so you also get the distances between others.
-// ranging_start turns Wi-Fi on (APSTA, hidden SoftAP as the FTM responder); ranging_stop or wifi_off ends it.
-// Don't use ESP-NOW yourself or call wifi_connect while it runs: it owns the radio and channel 1.
+// The OS starts it at boot and keeps it on (APSTA, hidden SoftAP as the FTM responder, ESP-NOW on channel 1), so
+// apps just call ranging_get. ranging_start/ranging_stop exist for apps that stopped it.
+// Don't use ESP-NOW yourself while it runs; wifi_on/wifi_connect stop it first.
 typedef struct {
     uint8_t a[6], b[6]; // a measured b; a = ranging_me() for this badge's own ranges
     int16_t cm;         // distance, -1 = b heard but not measured yet; FTM: ~1-2 m typical error, 5-10 m outliers

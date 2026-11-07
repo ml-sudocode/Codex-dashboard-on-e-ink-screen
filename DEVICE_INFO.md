@@ -10,7 +10,7 @@ and its experiment results, and the badge team's `documentation/itc97-driver-ref
 |---|---|
 | MCU | ESP32-S3-WROOM-1 (U1), 8 MB flash, octal PSRAM, Wi-Fi 2.4 GHz / ESP-NOW, native USB |
 | Screen | Pervasive Displays E2969JS0B1, 9.7" Spectra R2.0, black/white/red, 960x672, two CoGs ("B1") |
-| Buttons | 4 user buttons in a 2x2 block, plus BOOT and RESET |
+| Buttons | 4 user buttons, two in each top corner (MENU + above A on the left, MENU - above B on the right), plus BOOT and RESET |
 | LEDs | 8x WS2812 (XL-2121RGBC) bar, 1 status LED, 1 charge LED (charger-driven) |
 | Power | LiPo (JST PH 2.0 or pads), MCP73831 charger 500 mA, AP2112K-3.3 LDO, slide switch |
 | USB | USB-C, USB 2.0 full speed on the ESP32-S3 native USB; power sink only |

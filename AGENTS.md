@@ -35,8 +35,10 @@
   `ui_close()` when the screen will sit still.
 - Rows 0..`TOP`-1 (48 px) are the OS top bar (app name, OS version, battery); `ui_frame` draws it over `fb`.
   Keep your picture below `TOP`.
-- Buttons: `btn_get(timeout_ms)` returns `BTN_PLUS`, `BTN_MINUS`, `BTN_A`, `BTN_B` (as printed; 2x2 block:
-  MENU + top left, MENU - top right, A bottom left, B bottom right), or -1. The press that opened your app has
+- Buttons: `btn_get(timeout_ms)` returns `BTN_PLUS`, `BTN_MINUS`, `BTN_A`, `BTN_B` (as printed; two in each top
+  corner: MENU + above A on the left, MENU - above B on the right), or -1. Label them with
+  `ui_keys(plus, minus, a, b)`: the OS shows each label beside its button in the top bar. Holding MENU + and
+  MENU - together for 0.4 s goes home from any app (the OS restarts the badge between frames). The press that opened your app has
   been flushed.
 
 ## The panel (measured; the full story with pins and timings is in DEVICE_INFO.md)
