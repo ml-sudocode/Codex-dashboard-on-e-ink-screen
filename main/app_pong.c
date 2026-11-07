@@ -1,5 +1,5 @@
 // Pong between two badges over ESP-NOW, in real time: the host steps the game every STEP_MS in pixels and the
-// panel shows the latest state as fast as it can (~1 frame/s). The badge with the lower MAC is the host: it owns
+// panel shows the latest state as fast as it can (~2 frames/s). The badge with the lower MAC is the host: it owns
 // the ball; the guest shows the host's state and sends its paddle. Both screens show their own player on the left.
 // Any button starts pairing (press on both badges at once); in a game hold MENU + to move up, A to move down.
 // The AS5600 knob add-on (knob_angle(), plug in any time) moves the paddle too.
@@ -23,18 +23,17 @@
 
 static const char *TAG = "pong";
 
-// Tuning knobs. The panel lags ~1 s behind the game, so the ball has to be slow enough to react to.
-#define STEP_MS 20   // game step
-#define BALL_V 2     // ball px per step across (100 px/s: ~9 s from paddle to paddle)
+// Tuning knobs. The panel lags ~0.5 s behind the game, so the ball has to be slow enough to react to.
+#define STEP_MS 15   // game step
+#define BALL_V 2     // ball px per step across (133 px/s: ~7 s from paddle to paddle)
 #define BALL_DY 3    // steepest bounce, px per step up or down
-#define PAD_V 5      // paddle px per step while held (250 px/s)
-#define FRAME_MS 1100 // one panel frame: the hollow marker shows where the ball will be when it appears
+#define PAD_V 4      // paddle px per step while held (267 px/s)
 #define PAUSE_MS 2500 // after a point: the ball waits in the middle
 #define BALL 24
 #define PADW 16
 #define PADH 120
 #define PADX 24      // paddle's distance from its edge
-#define TRAIL 64     // ball positions kept for the trail, one per step (~1.3 s)
+#define TRAIL 40     // ball positions kept for the trail, one per step (0.6 s, about one frame and a bit)
 #define WIN 4        // first to 4: the LED bar has 4 LEDs per player
 #define CHANNEL 1
 #define LED_GPIO 38
@@ -74,12 +73,9 @@ static void draw(const game_t *s, const int16_t (*tr)[2], int ntr, bool mirror, 
         for (int k = 0; k < s->score[p]; k++) box(left ? W / 2 - 60 - 48 * k : W / 2 + 36 + 48 * k, 12, 24, 24, true);
     }
     if (!live) return;
-    for (int k = 0; k < MIN(ntr, TRAIL); k += 6) // the trail: a dot every 6 steps, where the ball has been
+    for (int k = 0; k < MIN(ntr, TRAIL); k += 5) // the trail: a dot every 5 steps, where the ball has been
         box(X(tr[k][0] + BALL / 2 - 4, 8), tr[k][1] + BALL / 2 - 4, 8, 8, true);
     box(X(s->bx, BALL), s->by, BALL, BALL, true);
-    if (!s->dx) return; // waiting to serve
-    int n = FRAME_MS / STEP_MS, fx = MIN(MAX(s->bx + s->dx * n, PADX + PADW), W - PADX - PADW - BALL);
-    outline(X(fx, BALL), fold_y(s->by, s->dy, n), BALL, BALL, 3); // where it is when this frame shows
 #undef X
 }
 
@@ -109,7 +105,7 @@ static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, ui
 }
 
 // Renders the latest state as fast as the panel goes. After a point both badges close the panel session, so
-// the reopen (~0.85 s) lands in the pause and the OS's forced reopen every 20 frames rarely hits a rally.
+// the reopen lands in the pause and the OS's forced reopen every 60 frames rarely hits a rally.
 static void pong(void)
 {
     ESP_LOGI(TAG, "%s, %s paddle", host ? "host" : "guest", host ? "left" : "right");
@@ -222,9 +218,11 @@ static void link_task(void *arg)
         bool got = xQueueReceive(rxq, &r, pdMS_TO_TICKS(10));
         int64_t now = esp_timer_get_time() / 1000;
         while (btn_get(0) >= 0) link_press(&lk, now); // any button pairs; ignored once paired
-        if (in_pong && now >= next_step) {
-            next_step = now + STEP_MS;
+        if (!in_pong) next_step = now;
+        for (; in_pong && now >= next_step; next_step += STEP_MS) { // fixed rate, whenever this loop wakes
             int held = btn_held(), v = (held >> BTN_A & 1) - (held >> BTN_PLUS & 1);
+            static int was_held;
+            if (held != was_held) ESP_LOGI(TAG, "held 0x%x, knob %d", was_held = held, knob_angle()); // hold-to-move check
             int k = knob_angle();
             if (k >= 0 && knob_last >= 0) knob_acc += ((k - knob_last + 6144) % 4096 - 2048) * KNOB_DIR * KNOB_TURN;
             knob_last = k;
