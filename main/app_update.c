@@ -108,14 +108,15 @@ static void wired(void)
         text(48, 240, 3, "USB-C cable. Both on battery.", true);
         text(48, 320, 3, "Badge on stock MicroPython:", true);
         text(48, 360, 3, "hold BOOT, tap RESET.", true);
-        text(48, 560, 3, "Any button goes home.", true);
+        ui_keys("Home", "Home", "Home", "Home");
         ui_frame(3);
         ui_close();
         while (pct == -1)
             if (btn_get(200) >= 0) stop = true;
         if (pct == -3) esp_restart(); // home, with the badge back on the Mac
 
-        // Copying: redraw whenever the number moved; each frame takes ~1.07 s while the copy task keeps going.
+        ui_keys(NULL, NULL, NULL, NULL);
+        // Copying: redraw whenever the number moved; each frame takes ~0.5 s while the copy task keeps going.
         for (int shown = -1, pulls = 3; pct >= 0 && pct <= 100;) {
             int p = pct;
             if (p == shown) {
@@ -157,7 +158,7 @@ void app_update(void)
             text(112, 240 + i * 200, 5, name[i], true);
             if (i == sel) outline(80, 208 + i * 200, 800, 104, 8);
         }
-        text(48, H - 48, 2, "MENU +/- move, A or B pick", true);
+        ui_keys("Up", "Down", "Pick", "Pick");
         ui_frame(pulls);
         pulls = 1;
         int b = btn_get(10000);
@@ -166,7 +167,7 @@ void app_update(void)
             b = btn_get(-1);
         }
         if (b == BTN_PLUS || b == BTN_MINUS) {
-            sel ^= 1;
+            sel = b == BTN_MINUS;
             continue;
         }
         ui_close();
