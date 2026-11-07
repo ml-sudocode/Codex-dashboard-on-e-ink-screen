@@ -102,14 +102,11 @@ static bool draw(void) // g -> fb; returns true when the game-over box is shown
             cell(WX + (s.x + s.c[k].x) * C, WY + (s.y + s.c[k].y) * C, s.type);
         }
     }
-    text(72, 100, 3, "NEXT", true); // left: the next piece and the controls
+    text(72, 100, 3, "NEXT", true); // left: the next piece
     outline(56, 140, 4 * C + 32, 4 * C + 32, 3);
     int o = (4 - SHAPE[s.next].n) * C / 2;
     for (int k = 0; k < 4; k++)
         cell(72 + o + SHAPE[s.next].c[k].x * C, 156 + o + SHAPE[s.next].c[k].y * C, s.next);
-    text(40, 440, 2, "A / B   move", true);
-    text(40, 476, 2, "MENU -  turn", true);
-    text(40, 512, 2, "MENU +  drop", true);
     label(680, 100, "SCORE", s.score); // right: the numbers
     label(680, 220, "ROWS", s.rows);
     label(680, 340, "LEVEL", s.rows / 10);
@@ -212,6 +209,7 @@ void app_blocks(void)
     lock = xSemaphoreCreateMutex();
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
+    ui_keys("drop", "turn", "left", "right");
     xTaskCreate(draw_task, "blocks draw", 4096, NULL, 5, &drawer);
     int ref = knob_angle(); // knob angle at the last step, -1 = no knob
     for (;;) {
