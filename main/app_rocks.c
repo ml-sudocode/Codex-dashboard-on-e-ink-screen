@@ -175,6 +175,7 @@ void app_rocks(void)
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
     xTaskCreate(draw_task, "rocks draw", 4096, NULL, 5, &drawer);
+    ui_keys("turn left", "turn right", "thrust", "fire");
     int ref = knob_angle(); // knob angle when it last steered, -1 = no knob
     for (;;) {
         memset(&g, 0, sizeof g);
