@@ -12,6 +12,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
+#include "qrcode.h"
 #include "badge.h"
 
 #define TAG "settings"
@@ -39,17 +40,21 @@ static const char page[] =
     "<label><input type=checkbox id=dit checked> Dither</label>"
     "<canvas id=cv width=960 height=624></canvas><small id=ist></small></div></fieldset>"
     "<fieldset><legend>Weather location</legend>"
-    "Paste a Google Maps link<input id=link placeholder='https://www.google.com/maps/@40.4,-3.7,12z'>"
+    "<label><input type=radio name=w id=wc checked> Place name</label> <label><input type=radio name=w id=wn> Coordinates</label>"
+    "<div id=wcd><input id=wx_city maxlength=64 placeholder='Pasadena (default), or e.g. Istanbul'>"
+    "<small>The Weather app looks it up online.</small></div>"
+    "<div id=wnd hidden>Paste a Google Maps link<input id=link placeholder='https://www.google.com/maps/@40.4,-3.7,12z'>"
     "Latitude<input id=wx_lat inputmode=decimal>Longitude<input id=wx_lon inputmode=decimal>"
-    "<small>In Google Maps: long-press a place, copy the coordinates or share the link (the full one, not "
-    "maps.app.goo.gl: the badge has no internet to follow short links).</small></fieldset>"
+    "<small>Or in Google Maps long-press a place and copy the coordinates (short maps.app.goo.gl links do not "
+    "work: the badge has no internet to follow them).</small></div></fieldset>"
     "<button id=save>Save and restart the badge</button><p id=st></p><script>"
-    "var K=['name','ssid','pass','badge_text','wx_lat','wx_lon'],$=function(i){return document.getElementById(i)},"
+    "var K=['name','ssid','pass','badge_text','wx_city','wx_lat','wx_lon'],$=function(i){return document.getElementById(i)},"
     "img=null,gray=null,hadImg=false;"
     "fetch('/cfg').then(function(r){return r.json()}).then(function(c){K.forEach(function(k){$(k).value=c[k]||''});"
-    "hadImg=c.img;if(c.img){$('mi').checked=true;$('ist').textContent='A picture is saved; choose a file to replace it.'}mode()});"
-    "function mode(){$('bt').hidden=$('mi').checked;$('bi').hidden=!$('mi').checked}"
-    "$('mt').onchange=$('mi').onchange=mode;"
+    "hadImg=c.img;if(!c.wx_city&&c.wx_lat)$('wn').checked=true;if(c.img){$('mi').checked=true;$('ist').textContent='A picture is saved; choose a file to replace it.'}mode()});"
+    "function mode(){$('bt').hidden=$('mi').checked;$('bi').hidden=!$('mi').checked;"
+    "$('wcd').hidden=$('wn').checked;$('wnd').hidden=!$('wn').checked}"
+    "$('mt').onchange=$('mi').onchange=$('wc').onchange=$('wn').onchange=mode;"
     "$('link').oninput=function(){var s=decodeURIComponent(this.value),"
     "m=s.match(/!3d(-?[\\d.]+)!4d(-?[\\d.]+)/)||s.match(/@(-?[\\d.]+),\\s*(-?[\\d.]+)/)||s.match(/(-?\\d+\\.\\d+)\\s*,\\s*(-?\\d+\\.\\d+)/);"
     "if(m){$('wx_lat').value=m[1];$('wx_lon').value=m[2]}};"
@@ -67,7 +72,8 @@ static const char page[] =
     "if(D){if(X<959)g[i+1]+=e*7/16;if(y<623){if(X)g[i+959]+=e*3/16;g[i+960]+=e*5/16;if(X<959)g[i+961]+=e/16}}}"
     "x.putImageData(o,0,0)}"
     "$('save').onclick=function(){var b='',pic=$('mi').checked;"
-    "K.forEach(function(k){if(k!='badge_text'||!pic)b+=k+'\\0'+$(k).value+'\\0'});"
+    "var skip={badge_text:pic,wx_city:$('wn').checked,wx_lat:$('wc').checked,wx_lon:$('wc').checked};"
+    "K.forEach(function(k){if(!skip[k])b+=k+'\\0'+$(k).value+'\\0'});"
     "if(pic&&!img&&!hadImg){$('st').textContent='Choose a picture first.';return}"
     "$('st').textContent='Saving...';"
     "(pic&&img?fetch('/image',{method:'POST',body:img}):Promise.resolve({ok:1})).then(function(r){"
@@ -93,11 +99,11 @@ static esp_err_t get_page(httpd_req_t *r) { return httpd_resp_send(r, page, size
 
 static esp_err_t get_cfg(httpd_req_t *r)
 {
-    static const char *keys[] = {"name", "ssid", "pass", "badge_text", "wx_lat", "wx_lon"};
+    static const char *keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon"};
     char *out = heap_caps_malloc(16 * 1024 + IMG_BYTES, MALLOC_CAP_SPIRAM), *p = out, v[1024];
     if (!out) return httpd_resp_send_500(r);
     *p++ = '{';
-    for (int i = 0; i < 6; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
+    for (int i = 0; i < 7; i++) cfg_get(keys[i], v, sizeof v), json_str(&p, keys[i], v);
     p += sprintf(p, "\"img\":%s}", cfg_get_image((uint8_t *)out + 16 * 1024) ? "true" : "false");
     httpd_resp_set_type(r, "application/json");
     esp_err_t e = httpd_resp_send(r, out, p - out);
@@ -146,15 +152,18 @@ static esp_err_t post_save(httpd_req_t *r)
         if (!strcmp(k, "name") && (l > 12 || !printable(v))) bad = "Username: up to 12 plain characters (A-Z, 0-9, ...).";
         else if (!strcmp(k, "ssid") && l > 32) bad = "SSID: up to 32 characters.";
         else if (!strcmp(k, "pass") && l && (l < 8 || l > 63)) bad = "Wi-Fi password: 8 to 63 characters, or empty.";
+        else if (!strcmp(k, "wx_city") && (l > 64 || !printable(v))) bad = "Place name: up to 64 plain characters.";
         else if (!strcmp(k, "wx_lat") && !coord(v, 90)) bad = "Latitude: a number from -90 to 90.";
         else if (!strcmp(k, "wx_lon") && !coord(v, 180)) bad = "Longitude: a number from -180 to 180.";
         else if (strcmp(k, "name") && strcmp(k, "ssid") && strcmp(k, "pass") && strcmp(k, "badge_text") &&
-                 strcmp(k, "wx_lat") && strcmp(k, "wx_lon")) bad = "Unknown setting.";
+                 strcmp(k, "wx_city") && strcmp(k, "wx_lat") && strcmp(k, "wx_lon")) bad = "Unknown setting.";
     }
     if (bad) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, bad);
     for (int i = 0; i + 1 < n; i += 2) {
         cfg_set(kv[i], *kv[i + 1] ? kv[i + 1] : NULL); // empty = unset (ssid/pass: back to the event Wi-Fi)
         if (!strcmp(kv[i], "badge_text")) cfg_set_image(NULL); // text replaces the picture
+        if (!strcmp(kv[i], "wx_city")) cfg_set("wx_lat", NULL), cfg_set("wx_lon", NULL); // a place name replaces
+        if (!strcmp(kv[i], "wx_lat")) cfg_set("wx_city", NULL);                         // coordinates, and back
     }
     ESP_LOGI(TAG, "saved %d settings", n / 2);
     httpd_resp_sendstr(r, "Saved. The badge restarts now.");
@@ -205,6 +214,14 @@ static esp_err_t to_portal(httpd_req_t *r, httpd_err_code_t err)
     return httpd_resp_sendstr(r, "Badge settings: http://" ADDR "/");
 }
 
+static void draw_qr(esp_qrcode_handle_t qr) // right half, as big as fits in 336 px
+{
+    int n = esp_qrcode_get_size(qr), m = 336 / n, x0 = 576 + (336 - n * m) / 2, y0 = TOP + 120;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+            if (esp_qrcode_get_module(qr, x, y)) box(x0 + x * m, y0 + y * m, m, m, true);
+}
+
 void app_settings(void)
 {
     char id[5], ssid[16];
@@ -239,14 +256,21 @@ void app_settings(void)
     ui_keys(NULL, NULL, NULL, "Home");
     memset(fb, 0, sizeof fb);
     text(48, TOP + 32, 5, "Settings", true);
-    text(48, TOP + 120, 3, "1. Join this Wi-Fi with a phone:", true);
-    text(96, TOP + 168, 6, ssid, true);
-    text(96, TOP + 240, 3, "Password:", true);
-    text(96, TOP + 280, 6, PASS, true);
-    text(48, TOP + 384, 3, "2. The settings page opens by", true);
-    text(48, TOP + 416, 3, "   itself. If not, browse to", true);
-    text(96, TOP + 464, 5, "http://" ADDR, true);
-    text(48, TOP + 560, 3, "Saving restarts the badge.", true);
+    text(48, TOP + 120, 3, "Join this Wi-Fi:", true);
+    text(48, TOP + 160, 5, ssid, true);
+    text(48, TOP + 232, 3, "Password:", true);
+    text(48, TOP + 272, 5, PASS, true);
+    text(48, TOP + 344, 3, "or scan the QR code.", true);
+    text(48, TOP + 416, 3, "The page opens by", true);
+    text(48, TOP + 448, 3, "itself, or browse to", true);
+    text(48, TOP + 488, 3, "http://" ADDR, true);
+    text(48, TOP + 560, 3, "Saving restarts it.", true);
+    char wifi_qr[64];
+    snprintf(wifi_qr, sizeof wifi_qr, "WIFI:T:WPA;S:%s;P:" PASS ";;", ssid);
+    esp_qrcode_config_t q = ESP_QRCODE_CONFIG_DEFAULT();
+    q.display_func = draw_qr;
+    q.qrcode_ecc_level = ESP_QRCODE_ECC_MED;
+    esp_qrcode_generate(&q, wifi_qr);
     ui_frame(1);
     ui_close();
 
