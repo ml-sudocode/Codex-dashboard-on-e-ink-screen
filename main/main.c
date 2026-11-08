@@ -31,6 +31,7 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "badge.h"
+#include "cricket.h"
 
 static const char *TAG = "os";
 
@@ -1012,6 +1013,7 @@ bool cfg_set_image(const uint8_t *img)
 // ---- SAO add-ons share one I2C bus: GPIO17 SDA / GPIO18 SCL, 5.1k pull-ups on the badge (DEVICE_INFO.md).
 // The knob add-on is an AS5600 magnetic encoder at 0x36 (its analog out is on the port's GPIO1, a NeoPixel on GPIO2).
 static i2c_master_bus_handle_t sao_bus;
+static const int sao_gpio[3][2] = {{2, 42}, {4, 5}, {7, 6}}; // GPIO1, GPIO2 of SAO1..3
 static i2c_master_dev_handle_t knob;
 
 static void sao_init(void) // boot: open the bus and log what answers on it
@@ -1029,32 +1031,36 @@ static void sao_init(void) // boot: open the bus and log what answers on it
 // The AS5600 also drives its angle as a voltage (0-3.3 V over a turn) on its port's GPIO1: read that when the knob
 // does not answer on I2C. SAO1's GPIO1 is GPIO2 (ADC1). A floating pin follows the pull resistors, a driven one does
 // not: that tells a plugged knob from an empty slot.
-static int knob_analog(int *up_mv, int *down_mv)
+// An SAO port's GPIO1 (port 0-2 = SAO1-3: GPIO2, GPIO4, GPIO7, all on ADC1) in mV with the internal pull-up or pull-down,
+// floating again after; -1 on error. The knob and the Cricket's port detection both read through here (one owner for
+// ADC1).
+static int sao_gpio1_mv(int port, bool pullup)
 {
-    enum { PIN = 2 };
     static adc_oneshot_unit_handle_t adc;
-    static adc_cali_handle_t cali;
-    static adc_channel_t ch;
-    if (!adc) {
-        adc_unit_t unit;
-        adc_oneshot_io_to_channel(PIN, &unit, &ch);
-        adc_oneshot_new_unit(&(adc_oneshot_unit_init_cfg_t){.unit_id = unit}, &adc);
+    static adc_cali_handle_t cali[3];
+    int pin = sao_gpio[port][0], v, sum = 0;
+    adc_unit_t unit;
+    adc_channel_t ch;
+    if (port < 0 || port > 2 || adc_oneshot_io_to_channel(pin, &unit, &ch) != ESP_OK) return -1;
+    if (!adc && adc_oneshot_new_unit(&(adc_oneshot_unit_init_cfg_t){.unit_id = unit}, &adc) != ESP_OK) return -1;
+    if (!cali[port]) {
         adc_oneshot_config_channel(adc, ch, &(adc_oneshot_chan_cfg_t){.atten = ADC_ATTEN_DB_12});
         adc_cali_create_scheme_curve_fitting(&(adc_cali_curve_fitting_config_t){.unit_id = unit, .chan = ch,
-                                                                                .atten = ADC_ATTEN_DB_12}, &cali);
+                                                                                .atten = ADC_ATTEN_DB_12}, &cali[port]);
+        if (!cali[port]) return -1;
     }
-    if (!cali) return -1;
-    int mv[2];
-    for (int k = 0; k < 2; k++) { // with the pull-up, then with the pull-down
-        gpio_set_pull_mode(PIN, k ? GPIO_PULLDOWN_ONLY : GPIO_PULLUP_ONLY);
-        int sum = 0, v;
-        for (int i = 0; i < 4; i++) sum += adc_oneshot_get_calibrated_result(adc, cali, ch, &v) == ESP_OK ? v : 0;
-        mv[k] = sum / 4;
-    }
-    gpio_set_pull_mode(PIN, GPIO_FLOATING);
-    if (up_mv) *up_mv = mv[0], *down_mv = mv[1];
-    if (abs(mv[0] - mv[1]) > 300) return -1; // floating: no knob
-    return MIN((mv[0] + mv[1]) / 2 * 4096 / 3300, 4095);
+    gpio_set_pull_mode(pin, pullup ? GPIO_PULLUP_ONLY : GPIO_PULLDOWN_ONLY);
+    for (int i = 0; i < 4; i++) sum += adc_oneshot_get_calibrated_result(adc, cali[port], ch, &v) == ESP_OK ? v : 0;
+    gpio_set_pull_mode(pin, GPIO_FLOATING);
+    return sum / 4;
+}
+
+static int knob_analog(int *up_mv, int *down_mv)
+{
+    int up = sao_gpio1_mv(0, true), down = sao_gpio1_mv(0, false);
+    if (up_mv) *up_mv = up, *down_mv = down;
+    if (up < 0 || down < 0 || abs(up - down) > 300) return -1; // floating: no knob
+    return MIN((up + down) / 2 * 4096 / 3300, 4095);
 }
 
 int knob_angle(void)
@@ -1114,11 +1120,12 @@ int battery_pct(void)
 // itself; tinny but fine for effects). Louder: a PDM-input amp (e.g. MAX98358) on both pins, or an analog amp
 // (e.g. PAM8302) on the data pin through an RC low-pass (~1k + 10 nF). Settings key "snd_sao": the port "1"-"3", "0" = none; unset = SAO2
 // (SAO1 usually holds the knob, whose analog out is SAO1's GPIO1).
-static const int sao_gpio[3][2] = {{2, 42}, {4, 5}, {7, 6}}; // GPIO1, GPIO2 of SAO1..3
 static i2s_chan_handle_t snd;
+static bool snd_cricket; // a Noisy Cricket with the speaker firmware plays it instead (components/cricket)
 
 void snd_stop(void)
 {
+    if (snd_cricket) cricket_snd_stop(), snd_cricket = false;
     if (!snd) return;
     i2s_channel_disable(snd);
     i2s_del_channel(snd);
@@ -1130,8 +1137,9 @@ bool snd_start(int rate)
     snd_stop();
     char s[4] = "2";
     cfg_get("snd_sao", s, sizeof s);
+    if (cricket_version() >= 1 && cricket_snd_start(rate)) return snd_cricket = true;
     int port = s[0] - '1';
-    if (port < 0 || port > 2) return false;
+    if (port < 0 || port > 2 || (cricket_version() >= 0 && port == cricket_port())) return false; // its pins are SWD
     i2s_chan_config_t c = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     c.auto_clear_after_cb = true; // nothing queued: silence, not the last buffer again
     if (i2s_new_channel(&c, &snd, NULL) != ESP_OK) return snd = NULL, false;
@@ -1148,7 +1156,8 @@ bool snd_start(int rate)
 void snd_write(const int16_t *pcm, int n)
 {
     size_t done;
-    if (snd) i2s_channel_write(snd, pcm, n * sizeof *pcm, &done, portMAX_DELAY);
+    if (snd_cricket) cricket_snd_write(pcm, n);
+    else if (snd) i2s_channel_write(snd, pcm, n * sizeof *pcm, &done, portMAX_DELAY);
 }
 
 // ---- LED bar: 8x WS2812 on GPIO38, RMT at 10 MHz (0: 0.3 us high, 0.9 us low; 1: 0.9 us high, 0.3 us low).
@@ -1206,7 +1215,8 @@ static void draw_bar(void)
     char mid[64], bat[16] = "USB";
     int n = snprintf(mid, sizeof mid, "%s%sv%s", name, *name ? "  " : "", esp_app_get_description()->version);
     if (pct >= 0) snprintf(bat, sizeof bat, "%d%%", pct);
-    int x = (W - n * 16 - (pct == -2 ? 0 : 32 + 38 + (int)strlen(bat) * 16)) / 2; // centre: text, battery, its label
+    bool spk = !in_app && cricket_version() >= 1; // home screen: a speaker Cricket is plugged in
+    int x = (W - n * 16 - (pct == -2 ? 0 : 32 + 38 + (int)strlen(bat) * 16) - (spk ? 40 : 0)) / 2; // text, battery, speaker
     box(0, 0, W, TOP, false);
     for (int k = 0; k < 4; k++) {
         if (!keys[k] || !*keys[k]) continue;
@@ -1216,12 +1226,20 @@ static void draw_bar(void)
     }
     text((W - (int)strlen(bar_app) * 16) / 2, 4, 2, bar_app, true);
     text(x, 26, 2, mid, true);
+    x += n * 16;
     if (pct != -2) { // a battery outline filled to the charge (full on USB), then "87%" or "USB"
-        x += n * 16 + 32;
+        x += 32;
         outline(x, 27, 30, 14, 2);
         box(x + 30, 31, 3, 6, true);
         box(x + 4, 31, pct < 0 ? 22 : 22 * pct / 100, 6, true);
         text(x + 38, 26, 2, bat, true);
+        x += 38 + (int)strlen(bat) * 16;
+    }
+    if (spk) { // a speaker: body, cone, one sound wave
+        x += 18;
+        box(x, 31, 6, 8, true);
+        for (int k = 0; k < 8; k++) box(x + 6 + k, 31 - k / 2, 1, 8 + k, true);
+        box(x + 18, 29, 2, 12, true);
     }
     box(0, TOP - 4, W, 2, true);
 }
@@ -1501,6 +1519,7 @@ void app_main(void)
     epd_init();
     btnq = xQueueCreate(8, sizeof(int));
     sao_init();
+    if (sao_bus) cricket_init(sao_bus, sao_gpio1_mv);
     int up, down;
     ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
     panel_lock = xSemaphoreCreateRecursiveMutex();
