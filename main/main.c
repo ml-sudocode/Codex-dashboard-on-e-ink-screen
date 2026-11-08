@@ -561,7 +561,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_FTM_REPORT) { // ranging: one FTM session done
         wifi_event_ftm_report_t *r = data;
         ftm_cm = r->status == FTM_STATUS_SUCCESS ? (int)r->dist_est : -1;
-        ESP_LOGI(TAG, "ftm %02x%02x: status %d, rtt %u ns, %u cm", r->peer_mac[4], r->peer_mac[5], r->status,
+        ESP_LOGD(TAG, "ftm %02x%02x: status %d, rtt %u ns, %u cm", r->peer_mac[4], r->peer_mac[5], r->status,
                  (unsigned)r->rtt_est, (unsigned)r->dist_est);
         xEventGroupSetBits(wifi_ev, 2);
     }
@@ -617,20 +617,35 @@ void wifi_off(void)
 // badge's FTM responder, so wifi_on/wifi_connect/wifi_off stop it. Background: RADAR_RESEARCH.md.
 #define RNG_CH 1
 #define RNG_FRAMES 16       // FTM frames per session (API: 0, 16, 24, 32, 64): two bursts of 8
+#define RNG_PERIOD 2        // FTM burst period, 100 ms units
 #define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (checked side by side)
 #define RNG_KEEP 128        // pairs kept, own and shared: n badges share up to n * 8 (about 80 with 10 badges)
-#define RNG_SHARE 8         // own ranges per beacon
+#define RNG_SHARE 8         // own ranges per BOSR beacon (v0.8 badges reject more)
+#define RNG_FAST 16         // results per BOSF packet
 #define RNG_STALE_US 30000000LL // a pair not heard of for 30 s is dropped
+// #define RNG_TUNE         // timing test: every session tries the next FTM setting and logs its time
+
+// Two ESP-NOW packets on channel 1. BOSR, ~1 s: the sender's SoftAP (where to aim FTM), its latest ranges and its
+// username; v0.8 badges know only this one, so it stays byte for byte as it was. BOSF, ~250 ms, badges after v0.8:
+// the raw results of the sessions the sender finished since its last BOSF, so the badge it measured needs not
+// measure back (half the FTM traffic between updated badges).
+typedef struct __attribute__((packed)) {
+    uint8_t mac[6];
+    int16_t cm;
+} rng_pair_t;
 
 typedef struct __attribute__((packed)) {
     char magic[4]; // "BOSR"
     uint8_t ap[6]; // the sender's SoftAP MAC: where to aim FTM
     uint8_t n;
-    struct __attribute__((packed)) {
-        uint8_t mac[6];
-        int16_t cm;
-    } r[RNG_SHARE];
+    rng_pair_t r[RNG_SHARE];
 } rng_beacon_t;
+
+typedef struct __attribute__((packed)) {
+    char magic[4]; // "BOSF"
+    uint8_t n;
+    rng_pair_t r[RNG_FAST];
+} rng_fast_t;
 
 // a -> b. Own entries (a = me) also keep b's SoftAP MAC and the last 4 FTM results (the minimum is the best guess:
 // multipath only ever makes the path longer).
@@ -638,11 +653,21 @@ static struct {
     uint8_t a[6], b[6], ap[6];
     char name[13]; // own entries: b's username from its beacon, "" if none
     int16_t cm, hist[4];
-    int64_t seen, at; // last beacon about this pair, last distance
+    int64_t seen, at;  // last beacon about this pair, last distance
+    int64_t fast, tried; // own entries: b's last BOSF (none: a v0.8 badge), our last FTM attempt on b
 } rng[RNG_KEEP];
 static uint8_t rng_me[6];
+static rng_pair_t rng_pend[RNG_FAST]; // my results for the next BOSF
+static int rng_npend;
 static SemaphoreHandle_t rng_lock, rng_done;
 static volatile bool rng_run;
+
+static int rng_find(const uint8_t *a, const uint8_t *b) // under rng_lock: the entry for a -> b, or -1
+{
+    for (int i = 0; i < RNG_KEEP; i++)
+        if (rng[i].seen && !memcmp(rng[i].a, a, 6) && !memcmp(rng[i].b, b, 6)) return i;
+    return -1;
+}
 
 static int rng_slot(const uint8_t *a, const uint8_t *b) // under rng_lock: the entry for a -> b, else the oldest, reset
 {
@@ -657,12 +682,41 @@ static int rng_slot(const uint8_t *a, const uint8_t *b) // under rng_lock: the e
     return old;
 }
 
+static void rng_result(int i, int cm, int64_t now) // under rng_lock: a measurement on own entry i
+{
+    memmove(rng[i].hist + 1, rng[i].hist, 3 * sizeof rng[i].hist[0]);
+    rng[i].hist[0] = cm;
+    for (int k = 1; k < 4; k++)
+        if (rng[i].hist[k] >= 0) cm = MIN(cm, rng[i].hist[k]);
+    rng[i].cm = cm, rng[i].at = now;
+    if (!rng[i].seen) rng[i].seen = now;
+}
+
 static void rng_recv(const esp_now_recv_info_t *info, const uint8_t *d, int len)
 {
+    int64_t now = esp_timer_get_time();
+    if (len >= 5 && !memcmp(d, "BOSF", 4)) {
+        const rng_fast_t *f = (const void *)d;
+        if (f->n > RNG_FAST || len < 5 + f->n * (int)sizeof f->r[0]) return;
+        xSemaphoreTake(rng_lock, portMAX_DELAY);
+        int x = rng_find(rng_me, info->src_addr); // only badges whose BOSR we already have
+        if (x >= 0) {
+            rng[x].fast = now;
+            for (int k = 0; k < f->n; k++) {
+                if (!memcmp(f->r[k].mac, rng_me, 6)) { // it measured me: as good as my own measurement of it
+                    rng_result(x, f->r[k].cm, now);
+                    continue;
+                }
+                int j = rng_slot(info->src_addr, f->r[k].mac);
+                rng[j].cm = f->r[k].cm, rng[j].seen = rng[j].at = now;
+            }
+        }
+        xSemaphoreGive(rng_lock);
+        return;
+    }
     const rng_beacon_t *m = (const void *)d;
     int head = offsetof(rng_beacon_t, r);
     if (len < head || memcmp(m->magic, "BOSR", 4) || m->n > RNG_SHARE || len < head + m->n * (int)sizeof m->r[0]) return;
-    int64_t now = esp_timer_get_time();
     xSemaphoreTake(rng_lock, portMAX_DELAY);
     int i = rng_slot(rng_me, info->src_addr); // a badge nearby: range it
     if (!rng[i].seen) ESP_LOGI(TAG, "ranging: new badge %02x%02x", info->src_addr[4], info->src_addr[5]);
@@ -680,7 +734,7 @@ static void rng_recv(const esp_now_recv_info_t *info, const uint8_t *d, int len)
 static void rng_task(void *arg)
 {
     static const uint8_t all[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    int64_t beacon = 0;
+    int64_t beacon = 0, fast = 0;
     for (int next = 0; rng_run;) {
         int64_t now = esp_timer_get_time();
         if (now >= beacon) {
@@ -700,40 +754,59 @@ static void rng_task(void *arg)
             esp_now_send(all, buf, len + 12);
             beacon = now + 800000 + esp_random() % 400000; // ~1 s, jittered so two badges do not keep colliding
         }
-        // FTM to the next badge heard from in the last 10 s, round robin
+        if (now >= fast) { // also when empty: it tells the others this badge sends BOSF
+            rng_fast_t f = {.magic = {'B', 'O', 'S', 'F'}};
+            xSemaphoreTake(rng_lock, portMAX_DELAY);
+            memcpy(f.r, rng_pend, rng_npend * sizeof rng_pend[0]);
+            f.n = rng_npend, rng_npend = 0;
+            xSemaphoreGive(rng_lock);
+            esp_now_send(all, (const uint8_t *)&f, 5 + f.n * sizeof f.r[0]);
+            fast = now + 200000 + esp_random() % 100000;
+        }
+        // FTM to the next badge heard from in the last 10 s, round robin. Skip one with a result in the last 400 ms
+        // (mine or from its BOSF); a badge that sends no BOSF (v0.8) gets at most one attempt per 5 s, as v0.8 does.
         uint8_t b[6], ap[6];
         int found = -1;
         xSemaphoreTake(rng_lock, portMAX_DELAY);
         for (int k = 0; k < RNG_KEEP && found < 0; k++) {
             int i = (next + k) % RNG_KEEP;
-            if (!memcmp(rng[i].a, rng_me, 6) && now - rng[i].seen < 10000000) found = i, memcpy(b, rng[i].b, 6), memcpy(ap, rng[i].ap, 6);
+            if (memcmp(rng[i].a, rng_me, 6) || now - rng[i].seen >= 10000000 || now - rng[i].at < 400000) continue;
+            bool updated = rng[i].fast && now - rng[i].fast < 5000000;
+            if (!updated && now - rng[i].tried < 5000000) continue;
+            found = i, rng[i].tried = now, memcpy(b, rng[i].b, 6), memcpy(ap, rng[i].ap, 6);
         }
         xSemaphoreGive(rng_lock);
         if (found < 0) {
-            ms(100);
+            ms(20);
             continue;
         }
         next = found + 1;
-        wifi_ftm_initiator_cfg_t cfg = {.channel = RNG_CH, .frm_count = RNG_FRAMES, .burst_period = 2};
+        wifi_ftm_initiator_cfg_t cfg = {.channel = RNG_CH, .frm_count = RNG_FRAMES, .burst_period = RNG_PERIOD};
+#ifdef RNG_TUNE
+        static const uint8_t try[4][2] = {{16, 0}, {8, 0}, {16, 1}, {16, 2}};
+        static int tune;
+        cfg.frm_count = try[tune][0], cfg.burst_period = try[tune][1], tune = (tune + 1) % 4;
+        int64_t t0 = esp_timer_get_time();
+#endif
         memcpy(cfg.resp_mac, ap, 6);
         xEventGroupClearBits(wifi_ev, 2);
         esp_err_t e = esp_wifi_ftm_initiate_session(&cfg);
         if (e != ESP_OK) ESP_LOGW(TAG, "ftm %02x%02x: start failed: %s", ap[4], ap[5], esp_err_to_name(e));
-        if (e == ESP_OK &&
-            (xEventGroupWaitBits(wifi_ev, 2, true, true, pdMS_TO_TICKS(2000)) & 2) && ftm_cm >= 0) {
+        bool ok = e == ESP_OK && (xEventGroupWaitBits(wifi_ev, 2, true, true, pdMS_TO_TICKS(500)) & 2) && ftm_cm >= 0;
+#ifdef RNG_TUNE
+        ESP_LOGI(TAG, "tune %02x%02x frames %d period %d: %s %d ms, %d cm", b[4], b[5], cfg.frm_count, cfg.burst_period,
+                 ok ? "ok" : "FAIL", (int)((esp_timer_get_time() - t0) / 1000), ok ? ftm_cm : -1);
+#endif
+        if (ok) {
+            int cm = MAX(0, ftm_cm - RNG_OFFSET_CM);
             xSemaphoreTake(rng_lock, portMAX_DELAY);
-            int i = rng_slot(rng_me, b), cm = MAX(0, ftm_cm - RNG_OFFSET_CM);
-            memmove(rng[i].hist + 1, rng[i].hist, 3 * sizeof rng[i].hist[0]);
-            rng[i].hist[0] = cm;
-            for (int k = 1; k < 4; k++)
-                if (rng[i].hist[k] >= 0) cm = MIN(cm, rng[i].hist[k]);
-            rng[i].cm = cm, rng[i].at = esp_timer_get_time();
-            if (!rng[i].seen) rng[i].seen = rng[i].at;
+            rng_result(rng_slot(rng_me, b), cm, esp_timer_get_time());
+            if (rng_npend < RNG_FAST) memcpy(rng_pend[rng_npend].mac, b, 6), rng_pend[rng_npend++].cm = cm;
             xSemaphoreGive(rng_lock);
         } else {
             esp_wifi_ftm_end_session();
         }
-        ms(50 + esp_random() % 100); // air for the other badges' bursts
+        ms(5 + esp_random() % 16); // air for the other badges' bursts
     }
     xSemaphoreGive(rng_done);
     vTaskDelete(NULL);
@@ -747,13 +820,14 @@ void ranging_start(void)
     esp_wifi_stop();
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     wifi_config_t ap = {.ap = {.ssid = "badge-os", .ssid_len = 8, .channel = RNG_CH, .authmode = WIFI_AUTH_OPEN,
-                               .ssid_hidden = 1, .max_connection = 1, .beacon_interval = 100, .ftm_responder = true}};
+                               .ssid_hidden = 1, .max_connection = 1, .beacon_interval = 1000, .ftm_responder = true}};
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
     ESP_ERROR_CHECK(esp_wifi_start());
     esp_wifi_set_ps(WIFI_PS_NONE); // modem sleep would drop beacons
     esp_wifi_set_channel(RNG_CH, WIFI_SECOND_CHAN_NONE);
     esp_read_mac(rng_me, ESP_MAC_WIFI_STA);
     memset(rng, 0, sizeof rng);
+    esp_log_level_set("wifi", ESP_LOG_ERROR); // the driver warns about every FTM session
     ESP_ERROR_CHECK(esp_now_init());
     esp_now_register_recv_cb(rng_recv);
     esp_now_add_peer(&(esp_now_peer_info_t){.peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, .channel = RNG_CH,
@@ -770,6 +844,7 @@ void ranging_stop(void)
     esp_now_deinit();
     esp_wifi_stop();
     esp_wifi_set_mode(WIFI_MODE_STA); // as wifi_on() left it
+    esp_log_level_set("wifi", ESP_LOG_WARN);
 }
 
 int ranging_get(range_t *out, int max)
