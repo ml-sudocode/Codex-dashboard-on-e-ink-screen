@@ -11,7 +11,7 @@
 #define LINK_GIVEUP 1500  // after my press: no mutual choice yet, back to free
 #define LINK_TIMEOUT 1000 // paired: no packet from the peer for this long, back to free
 #define LINK_PAIR_MS 50   // seeking: broadcast period
-#define LINK_GAME_MS 100  // paired: unicast period (the game packet is the heartbeat)
+#define LINK_GAME_MS 50   // paired: unicast period (the game packet is the heartbeat; 20/s keeps up with the panel)
 
 enum { L_FREE, L_SEEK, L_PAIRED };
 enum { P_PAIR = 1, P_GAME = 2 };
