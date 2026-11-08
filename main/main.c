@@ -1110,8 +1110,9 @@ int battery_pct(void)
 }
 
 // ---- Sound: an add-on on an SAO port gets the audio as PDM (1 bit at ~64x the sample rate) on the port's two GPIOs:
-// GPIO1 = data, GPIO2 = clock. A PDM-input amp (e.g. MAX98358) takes both; an analog amp (e.g. PAM8302) takes the data
-// pin through an RC low-pass (~1k + 10 nF). Settings key "snd_sao": the port "1"-"3", "0" = none; unset = SAO2
+// GPIO1 = data, GPIO2 = clock. Simplest: a passive piezo buzzer from GPIO1 to GND (it filters the bit stream by
+// itself; tinny but fine for effects). Louder: a PDM-input amp (e.g. MAX98358) on both pins, or an analog amp
+// (e.g. PAM8302) on the data pin through an RC low-pass (~1k + 10 nF). Settings key "snd_sao": the port "1"-"3", "0" = none; unset = SAO2
 // (SAO1 usually holds the knob, whose analog out is SAO1's GPIO1).
 static const int sao_gpio[3][2] = {{2, 42}, {4, 5}, {7, 6}}; // GPIO1, GPIO2 of SAO1..3
 static i2s_chan_handle_t snd;

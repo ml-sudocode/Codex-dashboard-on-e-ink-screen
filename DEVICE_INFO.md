@@ -119,6 +119,13 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - Partial updates open a fresh session every 60 frames (sessions of 60 are proven on the badge; the badge team
   used 20 for its fast frames, reason not documented).
 
+## Sound
+- No speaker on the badge. badge os sends audio as PDM (1 bit, ~64x the sample rate) on an SAO port's two GPIOs:
+  GPIO1 = data, GPIO2 = clock; SAO2 (GPIO4 / GPIO5) unless Settings key `snd_sao` says otherwise.
+- Simplest add-on: a passive piezo buzzer from GPIO1 to GND (not an active buzzer: that one only beeps at its own
+  pitch; a magnetic buzzer draws ~30 mA, so give it a transistor or at least ~100 ohm). Louder: a PDM-input amp
+  (MAX98358) on both pins, or an RC low-pass (~1k + 10 nF) on the data pin into an analog amp (PAM8302).
+
 ## LEDs
 - 8x WS2812 on GPIO38, chained, powered from 3V3 (keep brightness low, ~12/255 is plenty). GRB order, 800 kHz:
   the Pong app drives them with the RMT peripheral at 10 MHz (0 = 0.3/0.9 us, 1 = 0.9/0.3 us).

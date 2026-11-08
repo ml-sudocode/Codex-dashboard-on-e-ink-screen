@@ -70,7 +70,8 @@ bool cfg_set(const char *key, const char *val);
 #define IMG_BYTES (W * (H - TOP) / 8)
 bool cfg_get_image(uint8_t *img); // false if none saved
 bool cfg_set_image(const uint8_t *img); // NULL deletes it
-// Sound through an add-on on an SAO port (PDM on its two GPIOs; Settings "snd_sao" picks the port, SAO2 by default).
+// Sound through an add-on on an SAO port, e.g. a passive piezo from its GPIO1 to GND (PDM on the port's two GPIOs;
+// Settings "snd_sao" picks the port, SAO2 by default).
 // snd_start(rate) -> false if sound is off; then snd_write mono 16-bit samples at that rate (blocks while the ~30 ms
 // queue is full; gaps play silence); snd_stop when done (the OS also stops it back home).
 bool snd_start(int rate);
