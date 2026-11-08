@@ -85,6 +85,7 @@ void app_radar(void);
 void app_source(void);
 void app_hackaday(void);
 void app_badge(void);
+void app_clock(void);
 void app_settings(void);
 void app_weather(void);
 void app_news(void);
