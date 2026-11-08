@@ -1,5 +1,5 @@
 // Pong between two badges over ESP-NOW, in real time: the host steps the game every STEP_MS in pixels and the
-// panel shows the latest state as fast as it can (~2 frames/s). The badge with the lower MAC is the host: it owns
+// panel shows the latest state as fast as it can (~4-7 frames/s). The badge with the lower MAC is the host: it owns
 // the ball; the guest shows the host's state and sends its paddle. Both screens show their own player on the left.
 // Any button starts pairing (press on both badges at once); in a game hold MENU + to move up, A to move down.
 // The AS5600 knob add-on (knob_angle(), plug in any time) moves the paddle too.
@@ -22,7 +22,7 @@
 
 static const char *TAG = "pong";
 
-// Tuning knobs. The panel lags ~0.5 s behind the game, so the ball has to be slow enough to react to.
+// Tuning knobs. The panel lags ~0.2 s behind the game, so the ball has to be slow enough to react to.
 #define STEP_MS 15   // game step
 #define BALL_V 2     // ball px per step across (133 px/s: ~7 s from paddle to paddle)
 #define BALL_DY 3    // steepest bounce, px per step up or down
@@ -33,7 +33,7 @@ static const char *TAG = "pong";
 #define PADW 16
 #define PADH 120
 #define PADX 24      // paddle's distance from its edge
-#define TRAIL 40     // ball positions kept for the trail, one per step (0.6 s, about one frame and a bit)
+#define TRAIL 20     // ball positions kept for the trail, one per step (0.3 s, a frame or two)
 #define WIN 4        // first to 4: the LED bar has 4 LEDs per player
 #define CHANNEL 1
 #define LED_ON 12     // WS2812 brightness, 0-255
@@ -103,14 +103,14 @@ static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, ui
     }
 }
 
-// Renders the latest state as fast as the panel goes. After a point both badges close the panel session, so
-// the reopen lands in the pause and the OS's forced reopen every 60 frames rarely hits a rally.
+// Renders the latest state as fast as the panel goes (~4-7 frames/s); the game runs on the link task's clock.
 static void pong(void)
 {
     ESP_LOGI(TAG, "%s, %s paddle", host ? "host" : "guest", host ? "left" : "right");
     in_pong = true;
     ui_keys("up", NULL, "down", NULL);
-    int frames = 0, points = 0;
+    int frames = 0;
+    game_t last = {.score = {255}}; // what the last frame showed (nothing yet)
     while (lk.state == L_PAIRED) {
         taskENTER_CRITICAL(&gmux);
         game_t s = g;
@@ -118,9 +118,13 @@ static void pong(void)
         int ntr = trail_n;
         memcpy(tr, trail, sizeof tr);
         taskEXIT_CRITICAL(&gmux);
+        if (!memcmp(&s, &last, sizeof s)) { // nothing moved (waiting to serve, paddles still): don't spin
+            ms(10);
+            continue;
+        }
         draw(&s, tr, ntr, !host, true);
-        ui_frame(frames++ ? 1 : 3);
-        if (s.score[0] + s.score[1] != points) ui_close(), points = s.score[0] + s.score[1];
+        ui_frame(1); // returns while the panel works: the next frame is drawn meanwhile
+        last = s, frames++;
     }
     ui_close();
     in_pong = false;
