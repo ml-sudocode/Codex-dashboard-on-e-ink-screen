@@ -477,7 +477,8 @@ static void picture(int i, int y, int maxh)
         return;
     }
     for (int r = 0; r < m->h && r < maxh; r++)
-        for (int c = 0; c < m->w; c++)
+        if (!(x & 7)) memcpy(fb + (y + r) * (W / 8) + x / 8, m->bits + r * st, st); // byte-aligned: whole rows
+        else for (int c = 0; c < m->w; c++)
             if (m->bits[r * st + c / 8] & 0x80 >> (c & 7)) fb[((y + r) * W + x + c) / 8] |= 0x80 >> ((x + c) & 7);
 }
 
