@@ -271,11 +271,16 @@ static void run(void)
     }
 }
 
+static void ring(int x, int y, int w, int h) // a white frame, 6 px thick, on the black icon base
+{
+    box(x, y, w, h, false), box(x + 6, y + 6, w - 12, h - 12, true);
+}
+
 static void icon(int x, int y) // a little ship among rocks
 {
     icon_base(x, y);
     for (int r = 0; r < 24; r++) box(x + 88 - r / 2, y + 76 + r, r + 1, 1, false); // ship, nose up
-    outline(x + 28, y + 28, 40, 36, 6), outline(x + 116, y + 40, 32, 28, 6), outline(x + 112, y + 120, 44, 36, 6);
+    ring(x + 28, y + 28, 40, 36), ring(x + 116, y + 40, 32, 28), ring(x + 112, y + 120, 44, 36);
     box(x + 36, y + 124, 20, 20, false);
 }
 
