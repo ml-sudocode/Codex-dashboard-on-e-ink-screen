@@ -120,7 +120,7 @@ static void run(void)
     nlines = want = 0;
     pct = -1;
     stop = false;
-    xTaskCreate(draw_task, "ota draw", 4096, xTaskGetCurrentTaskHandle(), 5, &drawer);
+    xTaskCreate(draw_task, "ota draw", 6144, xTaskGetCurrentTaskHandle(), 5, &drawer);
     say(6, "Online update");
     snprintf(s, sizeof s, "This badge: v%s", ours);
     say(3, s);

@@ -210,7 +210,7 @@ static void run(void)
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
     ui_keys("drop", "turn", "left", "right");
-    xTaskCreate(draw_task, "blocks draw", 4096, NULL, 5, &drawer);
+    xTaskCreate(draw_task, "blocks draw", 6144, NULL, 5, &drawer);
     int ref = knob_angle(); // knob angle at the last step, -1 = no knob
     for (;;) {
         xSemaphoreTake(lock, portMAX_DELAY);

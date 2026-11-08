@@ -280,7 +280,7 @@ static snddevice_t snd_devices[] = {SNDDEVICE_SB};
 static boolean snd_init(boolean prefix)
 {
     if (!snd_start(SND_RATE)) return false; // no sound add-on set up: Doom runs silent
-    xTaskCreate(mix_task, "doom snd", 3072, NULL, 6, NULL);
+    xTaskCreate(mix_task, "doom snd", 4096, NULL, 6, NULL);
     return true;
 }
 static void snd_none(void) {}
@@ -331,7 +331,7 @@ static void run(void)
     }
     ui_keys("Turn left", "Turn right", "Walk  (+B: use)", "Fire  (+A: use)");
     ui_wipe();
-    xTaskCreate(draw_task, "doom draw", 3072, NULL, 5, &drawer);
+    xTaskCreate(draw_task, "doom draw", 6144, NULL, 5, &drawer);
     // zone: what PSRAM has left after the WAD, keeping 1 MB for the OS and the engine's own mallocs
     static char mb[12];
     snprintf(mb, sizeof mb, "%d", (int)((heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) - 1024 * 1024) >> 20));

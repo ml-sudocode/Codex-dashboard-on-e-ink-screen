@@ -228,7 +228,7 @@ static void run(void)
     lock = xSemaphoreCreateMutex();
     panel = xSemaphoreCreateMutex();
     shown = xSemaphoreCreateBinary();
-    xTaskCreate(draw_task, "aliens draw", 4096, NULL, 5, &drawer);
+    xTaskCreate(draw_task, "aliens draw", 6144, NULL, 5, &drawer);
     ui_keys("FIRE", "FIRE", "LEFT", "RIGHT");
     int ref = knob_angle(); // knob angle the gun last followed, -1 = no knob
     for (;;) {
