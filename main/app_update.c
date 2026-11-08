@@ -18,6 +18,7 @@
 #include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
 #include "badge.h"
+#include "cricket.h"
 
 static volatile int pct;   // -1 waiting for a badge, 0-100 copying, 101 done, -2 failed, -3 stopped
 static volatile bool stop; // the app asks the waiting task to give up
@@ -82,13 +83,31 @@ static void update_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void message(const char *s)
+// Title, a big line, an optional small one below; the screen then sits still.
+static void message(const char *title, const char *s, const char *small)
 {
     memset(fb, 0, sizeof fb);
-    text(48, TOP + 24, 6, "Wired update", true);
+    text(48, TOP + 24, 6, title, true);
     text(48, 300, 6, s, true);
+    if (small) text(48, 420, 3, small, true);
     ui_frame(1);
     ui_close();
+}
+
+// A frame scans only the changed rows, fastest in the lower half: the bar, the number and the note live there
+// (~0.13 s a step), the static text above. The bar only grows; the number and note leave a light ghost.
+static void progress(const char *title, const char *line, int p, const char *note)
+{
+    char s[8];
+    snprintf(s, sizeof s, "%d%%", p);
+    memset(fb, 0, sizeof fb);
+    text(48, TOP + 24, 6, title, true);
+    text(48, 240, 4, line, true);
+    outline(48, 448, 720, 96, 6);
+    box(60, 460, 696 * p / 100, 72, true);
+    text(800, 480, 4, s, true);
+    if (note) text(48, 580, 3, note, true);
+    ui_frame(1);
 }
 
 static void wired(void)
@@ -124,56 +143,83 @@ static void wired(void)
                 ms(20);
                 continue;
             }
-            char s[8];
-            snprintf(s, sizeof s, "%d%%", p);
-            memset(fb, 0, sizeof fb);
-            // A frame scans only the changed rows, fastest in the lower half: the bar and the number live there
-            // (~0.13 s a step), the static text above. The bar only grows; the number leaves a light ghost.
-            text(48, TOP + 24, 6, "Wired update", true);
-            text(48, 240, 4, "Updating connected badge", true);
-            outline(48, 448, 720, 96, 6);
-            box(60, 460, 696 * p / 100, 72, true);
-            text(800, 480, 4, s, true);
-            ui_frame(1);
+            progress("Wired update", "Updating connected badge", p, NULL);
             shown = p;
         }
         ui_close();
         if (pct == 101) {
-            message("Done");
+            message("Wired update", "Done", NULL);
             ms(3000);
             esp_restart(); // boots to the home screen, USB back to USB-Serial-JTAG
         }
-        message("Update failed"); // then keep scanning: unplug, fix, plug again
+        message("Wired update", "Update failed", NULL); // then keep scanning: unplug, fix, plug again
         ms(3000);
     }
 }
 
-// Chooser: online update (app_ota.c) or the wired update above. Same keys as the home screen.
+// Cricket SAO on stock firmware: put the speaker firmware on it over SWD (components/cricket). Back to the chooser.
+static int cricket_shown = -1;
+
+static void cricket_progress(int p, const char *what)
+{
+    if (p != cricket_shown) progress("Cricket speaker", "Updating the Cricket", p, what);
+    cricket_shown = p;
+}
+
+static void cricket(void)
+{
+    ui_keys(NULL, NULL, NULL, NULL);
+    int port = cricket_port(); // toggles pulls on the SAO pins: only here, never per frame
+    if (port < 0) {
+        message("Cricket speaker", "Port unclear", "Plug the Cricket in alone and try again.");
+        ms(3000);
+        return;
+    }
+    cricket_shown = -1;
+    const char *err = cricket_update(port, cricket_progress);
+    ui_close();
+    message("Cricket speaker", err ? "Update failed" : "Done", err);
+    ms(3000);
+}
+
+// Chooser: online update (app_ota.c), the wired update above, and the Cricket update while a stock Cricket is
+// plugged in (checked every 2 s). Same keys as the home screen.
 void app_update(void)
 {
-    static const char *name[2] = {"Online update", "Flash another badge"};
-    for (int sel = 0;;) {
-        memset(fb, 0, sizeof fb);
-        text(48, TOP + 24, 6, "Update", true);
-        for (int i = 0; i < 2; i++) {
-            text(112, 384 + i * 160, 5, name[i], true); // lower half: a move scans only those rows
-            if (i == sel) outline(80, 352 + i * 160, 800, 104, 8);
+    static const char *name[3] = {"Online update", "Flash another badge", "Cricket speaker update"};
+    for (int sel = 0, shown = -1, idle = 0;;) {
+        int n = cricket_version() == 0 ? 3 : 2;
+        sel = MIN(sel, n - 1);
+        if (sel + 4 * n != shown) {
+            memset(fb, 0, sizeof fb);
+            text(48, TOP + 24, 6, "Update", true);
+            for (int i = 0; i < n; i++) {
+                text(112, 344 + i * 120, 4, name[i], true); // low on the screen: a move scans fewer rows
+                if (i == sel) outline(80, 312 + i * 120, 800, 96, 8);
+            }
+            ui_keys("Up", "Down", "Pick", "Pick");
+            ui_frame(1);
+            shown = sel + 4 * n;
+            idle = 0;
         }
-        ui_keys("Up", "Down", "Pick", "Pick");
-        ui_frame(1);
-        int b = btn_get(10000);
-        if (b < 0) { // the screen sits still
-            ui_close();
-            b = btn_get(-1);
+        int b = btn_get(2000);
+        if (b < 0) {
+            if (++idle == 5) ui_close(); // the screen sits still
+            continue;
         }
         if (b == BTN_PLUS || b == BTN_MINUS) {
-            sel = b == BTN_MINUS;
+            sel = b == BTN_PLUS ? MAX(sel - 1, 0) : MIN(sel + 1, n - 1);
             continue;
         }
         ui_close();
         btn_flush();
         if (sel == 1) wired(); // never returns
-        app_ota();             // returning goes home; no USB host was installed on this path
+        if (sel == 2) {
+            cricket();
+            shown = -1;
+            continue;
+        }
+        app_ota(); // returning goes home; no USB host was installed on this path
         return;
     }
 }
