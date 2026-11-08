@@ -6,13 +6,12 @@
 #include <string.h>
 #include "badge.h"
 #include "esp_attr.h"
-#include "esp_timer.h"
 
 #define NODES 32       // me + up to 31 badges
 #define MAP_X 384      // map area: x MAP_X..W, y TOP..H
 #define MAP_R 270      // px from the map centre to the outer ring
 #define SNAP 6         // px grid for dots: small wobble in the fit does not redraw the panel
-#define FRAME_MS 500   // one frame per panel refresh (~0.48 s): every frame can show new distances
+#define FRAME_MS 100   // poll for new distances every 0.1 s; while the screen keeps changing, ui_frame sets the pace
 
 typedef struct { uint8_t mac[6]; float x, y; } node_t;
 
@@ -96,7 +95,6 @@ void app_radar(void)
     ranging_me(me);
     ui_keys(NULL, NULL, "clear ghosts", "home");
     for (int frame = 0;; frame++) {
-        int64_t t0 = esp_timer_get_time();
         int n = ranging_get(rg, 1024);
 
         // Nodes: me, then every badge I hear, measured ones first, nearest first; known positions carried over.
@@ -185,10 +183,9 @@ void app_radar(void)
         } else {
             text(MAP_X + 24, cy - 12, 3, "Map: needs 3+ badges", true);
         }
-        ui_frame(1); // ~0.48 s when something changed; no change since the last frame = no refresh
+        ui_frame(1); // returns during the pull; waits only while the last frame has not started. No change = no refresh
 
-        int left = FRAME_MS - (int)((esp_timer_get_time() - t0) / 1000);
-        int b = btn_get(left > 0 ? left : 0);
+        int b = btn_get(FRAME_MS);
         if (b == BTN_A) ui_wipe();
         if (b == BTN_B) return; // the OS keeps ranging on every screen
     }
