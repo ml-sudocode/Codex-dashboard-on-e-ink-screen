@@ -1,7 +1,7 @@
-// RSS reader, shared by Hackaday and News: rss_reader(feed URL, name). Joins Wi-Fi, reads the feed into PSRAM, then
-// browses it one post per screen: its featured image (the post's first picture) and title; A opens the full post
-// with its pictures. Images come in the background on the same connection (Hackaday's WordPress resizer and BBC's
-// image server shrink them; stb_image decodes, Atkinson dithers to 1 bit). Wi-Fi goes off (and ranging back on) when
+// Hackaday: hackaday.com's RSS feed. Joins Wi-Fi, reads the feed into PSRAM, then browses it one post per screen: its
+// featured image (the post's first picture) and title; A opens the full post with its pictures. Images come in the
+// background on the same connection (Hackaday's WordPress resizer shrinks them; stb_image decodes, Atkinson dithers
+// to 1 bit). Wi-Fi goes off (and ranging back on) when
 // the images are in.
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +41,7 @@ typedef struct {
     volatile int8_t state; // 0 to fetch, 1 ready, -1 failed
 } img_t;
 
-static const char *feed_url;
+#define FEED "https://hackaday.com/blog/feed/"
 static post_t *posts; // PSRAM, like everything big here
 static int nposts, nimg;
 static img_t *imgs;
@@ -110,13 +110,10 @@ static int add_img(int p, const char *s, const char *e, const char *u)
     if (w <= 0 || h <= 0) w = 16, h = 9;   // unknown: assume a wide picture
     if (w * bh > h * bw) m->w = bw, m->h = bw * h / w; // the box it is scaled into
     else m->h = bh, m->w = bh * w / h;
-    char *bbc = strstr(src, "/standard/240/");
     if (strstr(src, "/wp-content/uploads/")) { // WordPress resizes on its own server: a ~40 KB JPEG
         if (q) *q = 0;
         snprintf(m->url, sizeof m->url, "%s?fit=%d,%d&quality=40", src, m->w, m->h);
-    } else if (bbc) // BBC thumbnails come in sizes: a sharper one
-        snprintf(m->url, sizeof m->url, "%.*s/standard/624/%s", (int)(bbc - src), src, bbc + 14);
-    else snprintf(m->url, sizeof m->url, "%s", src);
+    } else snprintf(m->url, sizeof m->url, "%s", src);
     m->post = p, m->bits = NULL, m->state = 0;
     if (!k) posts[p].cover = nimg;
     return 0x80 + nimg++;
@@ -208,17 +205,9 @@ static void parse(void)
         field(p->title, sizeof p->title, s, e, "title");
         field(p->author, sizeof p->author, s, e, "dc:creator");
         field(p->date, 17, s, e, "pubDate"); // "Sat, 07 Nov 2026"
-        const char *b, *a = find(s, e, "content:encoded", &b); // the full post; short feeds only have a description
-        if (!a) a = find(s, e, "description", &b);
+        const char *b, *a = find(s, e, "content:encoded", &b); // the full post
         if (!a) a = b = e;
-        int max = b - a + 8, n = 0;
-        if (!(p->body = heap_caps_malloc(max, MALLOC_CAP_SPIRAM))) continue;
-        const char *th = strstr(s, "<media:thumbnail"), *te = th ? strchr(th, '>') : NULL; // BBC: a thumbnail only
-        int m = te && te < e && !memmem(a, b - a, "<img", 4) ? add_img(i, th, te, "url") : 0;
-        if (m) p->body[n++] = m, p->body[n++] = '\n';
-        clean(p->body + n, max - n, a, b, i);
-        char *rm = strstr(p->body, "...read more"); // Hackaday's descriptions end in a link
-        if (rm) strcpy(rm, "...");
+        if ((p->body = heap_caps_malloc(b - a + 1, MALLOC_CAP_SPIRAM))) clean(p->body, b - a + 1, a, b, i);
     }
 }
 
@@ -261,7 +250,7 @@ static int get(esp_http_client_handle_t c, const char *url, char *buf, int cap)
 static esp_http_client_handle_t client(void)
 {
     return esp_http_client_init(&(esp_http_client_config_t){
-        .url = feed_url, .crt_bundle_attach = esp_crt_bundle_attach, .timeout_ms = 15000, .user_agent = "badge-os",
+        .url = FEED, .crt_bundle_attach = esp_crt_bundle_attach, .timeout_ms = 15000, .user_agent = "badge-os",
         .buffer_size = 16384, .keep_alive_enable = true, .event_handler = on_data});
 }
 
@@ -312,7 +301,7 @@ static bool decode(img_t *m, int n)
 static int get_feed(esp_http_client_handle_t c)
 {
     esp_http_client_set_header(c, "Accept-Encoding", "gzip");
-    int n = get(c, feed_url, jpg, JCAP);
+    int n = get(c, FEED, jpg, JCAP);
     esp_http_client_delete_header(c, "Accept-Encoding");
     const uint8_t *z = (uint8_t *)jpg;
     if (n < 18 || z[0] != 0x1F || z[1] != 0x8B) { // the server sent it plain
@@ -536,7 +525,7 @@ static int wait_btn(void)
     }
 }
 
-static void loading(const char *name)
+static void loading(void)
 {
     char s[64];
     int shown = -1;
@@ -546,7 +535,7 @@ static void loading(const char *name)
             shown = now;
             memset(fb, 0, sizeof fb);
             text(48, TOP + 48, 5, "Loading...", true);
-            text(48, TOP + 128, 3, name, true);
+            text(48, TOP + 128, 3, "hackaday.com", true);
             text(48, TOP + 200, 3, "Joining Wi-Fi...", true);
             if (stage >= 1) {
                 snprintf(s, sizeof s, "Wi-Fi joined in %.1f s", join_ms / 1000.0);
@@ -572,14 +561,13 @@ static void stop_net(void)
 
 static void run(void *arg)
 {
-    const char *name = arg;
     for (int switches = 0;;) { // load
         stop_net();
         *err = 0;
         stage = bytes = cur_post = 0, net_stop = false, net_running = true;
         xTaskCreate(net, "rss net", 20480, NULL, 4, NULL); // TLS and stb_image
         ui_keys(NULL, NULL, NULL, NULL);
-        loading(name);
+        loading();
         if (stage == 3) {
             ui_keys(NULL, NULL, NULL, "Retry");
             message(5, "No feed.", err);
@@ -607,19 +595,13 @@ static void run(void *arg)
 }
 
 // Takes over the badge for good (home is MENU + and MENU -).
-void rss_reader(const char *url, const char *name)
+void app_hackaday(void)
 {
-    feed_url = url;
     feed = heap_caps_malloc(CAP, MALLOC_CAP_SPIRAM);
     jpg = heap_caps_malloc(JCAP, MALLOC_CAP_SPIRAM);
     posts = heap_caps_calloc(MAXP, sizeof *posts, MALLOC_CAP_SPIRAM);
     imgs = heap_caps_calloc(MAXI, sizeof *imgs, MALLOC_CAP_SPIRAM);
     lines = heap_caps_calloc(MAXL, sizeof *lines, MALLOC_CAP_SPIRAM);
-    xTaskCreate(run, "rss", 16384, (void *)name, 4, NULL);
+    xTaskCreate(run, "rss", 16384, NULL, 4, NULL);
     vTaskSuspend(NULL);
-}
-
-void app_hackaday(void)
-{
-    rss_reader("https://hackaday.com/blog/feed/", "hackaday.com");
 }
