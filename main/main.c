@@ -1103,6 +1103,21 @@ static void icon_badge(int x, int y) // a name tag: a white card with a black ba
     box(x + 40, y + 96, 96, 10, true);
 }
 
+static void icon_clock(int x, int y) // a dial: ring, hour ticks, two hands
+{
+    icon_base(x, y);
+    int c = ICON / 2;
+    for (int r = 0; r < ICON; r++)
+        for (int k = 0; k < ICON; k++) {
+            int dx = k - c, dy = r - c, d2 = dx * dx + dy * dy;
+            bool ring = d2 > 60 * 60 && d2 < 68 * 68;
+            bool tick = d2 > 46 * 46 && d2 < 58 * 58 && (abs(dx) < 4 || abs(dy) < 4);
+            if (ring || tick || d2 < 8 * 8) box(x + k, y + r, 1, 1, false);
+        }
+    box(x + c - 4, y + c - 44, 8, 44, false); // minute hand, to 12
+    box(x + c, y + c - 4, 32, 8, false);      // hour hand, to 3
+}
+
 static void icon_settings(int x, int y) // a gear
 {
     icon_base(x, y);
@@ -1155,6 +1170,7 @@ typedef struct {
 
 static const app_t apps[] = {
     {"Badge", icon_badge, app_badge}, // the name tag first: what a badge is for
+    {"Clock", icon_clock, app_clock},
     {"Update", icon_update, app_update},
     {"Pong", icon_pong, app_pong},
     {"Snake", icon_snake, app_snake},

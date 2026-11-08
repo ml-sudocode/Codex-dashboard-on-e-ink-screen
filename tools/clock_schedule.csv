@@ -1,0 +1,44 @@
+day,time,stage,talk
+Sat,10:00,Lamarr,The Hacker Mindset (KEYNOTE)
+Sat,11:30,Lamarr,Blinkenlights That Remember: The Unsigned Firmware on your PC's RAM
+Sat,11:30,Hopper,Designing Devices: Not Just PCBs in Boxes
+Sat,13:00,Lamarr,Bad Apple in 65 Kilobytes
+Sat,13:00,Hopper,The Terminal That Rings You Back: Swedens Failed Pre-Internet
+Sat,14:00,Lamarr,Rover Tracks: A Retrospective on the Open Source Rover
+Sat,14:00,Hopper,Vibe-CADding a Wearable Speedometer for a Six Year Old
+Sat,14:30,Lamarr,Alternative Controllers: Designing Unconventional Game Worlds
+Sat,14:30,Hopper,Achieving Quality Photoresist Uniformity on Asymmetric Substrates
+Sat,15:30,Lamarr,Minus: Blocking Ads at the Pixel Level with an HDMI Man-in-the-Middle
+Sat,16:00,Lamarr,How to Rob a Bank Without Really Trying
+Sat,16:00,Hopper,Building Things That Matter in the Age of AI
+Sat,16:30,Hopper,Spinning E-textile Yarns
+Sat,17:00,Lamarr,Secrets of Ghidra: Reverse Engineering Proprietary Smart Home Sensors
+Sat,17:00,Hopper,Overengineering a CD Shelf
+Sat,17:30,Lamarr,The Road to DOOM on an FPGA: Building a Soft-Logic Computer
+Sat,18:00,Hopper,Prototyping the Future: Emerging Technologies
+Sat,18:30,Lamarr,No Refresh Button: The Case For (and Against) Putting a Browser on Your Device
+Sat,18:30,Hopper,The Perfect BLEnd: Reverse Engineering a Bluetooth Blender
+Sun,13:00,Lamarr,A Builders Guide to Developing Integrated Photonics
+Sun,13:00,Hopper,HM and I: Down the Rabbithole of Human Machine Interfacing
+Sun,14:00,Lamarr,When Faster Isnt Better: How Displays Cheat Time
+Sun,14:00,Hopper,Finding a Loop: Creative Uses for e-Waste
+Sun,14:30,Lamarr,Rare Circuits: How we Used and Abused a $1 MCU
+Sun,14:30,Hopper,The Hardware of Superconducting Quantum Computing
+Sun,15:00,Hopper,LoRa and Beyond
+Sun,15:30,Lamarr,How Many Neurons does It Take to Pump a Swing?
+Sun,15:30,Hopper,Bringing PCB Fabrication into the Makerspace
+Sun,16:00,Lamarr,How to Make and Have Feelings
+Sun,16:00,Hopper,StageReady: a Standalone Device for Vocal Pitch Correction
+Sun,16:30,Lamarr,Designing Tiny ASIC GPUs
+Sun,16:30,Hopper,EDA for Everyone: PCB Design in the Agentic Era
+Fri,13:00,HQ 2nd Floor,Tiny Tapeout (Part 1)
+Fri,15:00,HQ 2nd Floor,Tiny Tapeout (Part 2)
+Sat,11:30,Room A,Badge Hacking for Beginners
+Sat,11:30,Room B,Explore the EMF Around You
+Sat,14:00,Room A,Powered Flowers and Prismatic Stars
+Sat,14:00,Room B,DigiKey Presents: Reinforcement Learning for Robotics
+Sat,16:30,Room A,Exquisite Circuit: Exquisite Corpse for Electronics
+Sat,16:30,Room B,Bling It On: Programming Your Own Generative Art Matrix
+Sun,12:00,Room A,Making 3D Images (Lenticulars) and 3D Cameras
+Sun,12:00,Room B,Arduino Presents: EchoGlow
+Sun,15:00,Room B,We Have TSCM at Home! (Learn to Build Your Own Wireless Bug Hunting Tools)
