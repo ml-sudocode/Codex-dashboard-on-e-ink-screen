@@ -1,0 +1,5 @@
+# The engine's ~240 KB of static arrays go to PSRAM: internal RAM stays free for Wi-Fi and the OS.
+[mapping:doom]
+archive: libdoom.a
+entries:
+    * (extram_bss)
