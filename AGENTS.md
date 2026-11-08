@@ -15,6 +15,7 @@
   - `app-radar`: `main/app_radar.c`
   - `app-hackaday`: `main/app_hackaday.c`
   - `app-doom`: `main/app_doom.c`, `components/doom/` (the engine as its own component)
+  - `sao-cricket`: `components/cricket/` (Noisy Cricket SAO as the speaker: its firmware, an SWD flasher, I2C sound)
   - `app-badge`: `main/app_badge.c`
   - `app-settings`: `main/app_settings.c`
   - `app-weather`: `main/app_weather.c`
