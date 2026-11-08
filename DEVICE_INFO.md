@@ -162,5 +162,6 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - 8 MB. badge os: bootloader at 0x0, partition table at 0x8000, NVS at 0x9000 (24 KB), otadata at 0xF000,
   two 3 MB app slots (ota_0 at 0x20000, ota_1 at 0x320000) for online updates with rollback: a new version that
   does not reach the home screen once is rolled back at the next boot. Coredump at 0x620000 (64 KB), the Badge
-  app's picture at 0x630000 (128 KB, used by address: badges updated over the air keep their old partition table).
+  app's picture at 0x630000 (128 KB), Doom's packed game data at 0x650000 (1.69 MB, to the end of flash). Both are
+  used by address: badges updated over the air keep their old partition table.
 - The stock MicroPython firmware kept a LittleFS filesystem at 0x310000; it survives flashing a smaller app.

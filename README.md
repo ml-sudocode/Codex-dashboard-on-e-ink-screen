@@ -77,4 +77,10 @@ Pins, buttons, LEDs, power, the panel's refresh modes, timings, ghosting and the
 [DEVICE_INFO.md](DEVICE_INFO.md). The panel driver started in
 [supercon26-badge-idf](https://github.com/yigitabi5444/supercon26-badge-idf).
 
+## License
+GPL-2.0 (`LICENSE`), because the Doom app links the doomgeneric engine (`components/doom`, GPL-2.0). Bundled third-party
+parts keep their own terms: stb_image (public domain), the 8x8 font (public domain), the Clock's DejaVu fonts (DejaVu
+license). Doom's game data is id Software's unmodified shareware `DOOM1.WAD`, downloaded by the badge from the
+`doom-wad` release, not part of this source.
+
 Unofficial. Not affiliated with Hackaday or Pervasive Displays.
