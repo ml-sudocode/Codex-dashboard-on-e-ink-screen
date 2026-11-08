@@ -3,7 +3,7 @@
 //   buttons.h  btn_get, btn_flush, btn_held                  wifi.h     wifi_on, wifi_connect, wifi_off
 //   ranging.h  badges nearby and their distances             settings.h cfg_get, cfg_set, the Badge picture
 //   sound.h    snd_start, snd_write, snd_stop                leds.h     the LED bar
-//   knob.h     the AS5600 knob add-on                         power.h    battery_pct
+//   knob.h     the AS5600 knob add-on                        power.h    battery_pct
 //   app.h      app_t, the home screen's icons
 // How to write an app: apps/README.md.
 #pragma once

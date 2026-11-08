@@ -1,7 +1,7 @@
 # Radar: what the badge can do (phase 1 research)
 
 Goal: show other badge os badges nearby: who, how far, and if possible which direction.
-Hardware facts: ESP32-S3-WROOM-1 (module PCB antenna, 2.4 GHz only), no IMU, no compass (DEVICE_INFO.md).
+Hardware facts: ESP32-S3-WROOM-1 (module PCB antenna, 2.4 GHz only), no IMU, no compass (docs/DEVICE_INFO.md).
 Optional AS5600 knob on an SAO port. ESP-IDF v6.0.2. "Checked" = read in the local IDF tree; "[n]" = source list at the end.
 
 ## 1. Wi-Fi FTM (802.11mc round-trip time)
@@ -65,7 +65,7 @@ Optional AS5600 knob on an SAO port. ESP-IDF v6.0.2. "Checked" = read in the loc
   channel, so the radar must not call `wifi_connect` (it does not need to).
 - Power: Wi-Fi on with power save off (Pong does this; modem sleep drops packets) is ~100 mA receive; FTM
   ~75 mA average [5]. The radar is a "look now" app, not a background service: the home screen turns Wi-Fi off
-  when it returns. Battery capacity is not in DEVICE_INFO.md, so no run-time figure.
+  when it returns. Battery capacity is not in docs/DEVICE_INFO.md, so no run-time figure.
 - Mode change is app-side: `wifi_on()` sets STA once; the app switches to `WIFI_MODE_APSTA` and must put STA
   back before returning. Only the FTM Kconfig switch needs the OS.
 

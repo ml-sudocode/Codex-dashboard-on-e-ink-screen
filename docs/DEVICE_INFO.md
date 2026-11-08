@@ -78,7 +78,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 | **Fast full**: badge team table `lutb_base` at 0xB0, 3 pulls | ~3.5 s with the quick open | the whole panel flashes; black is grey-brown to maroon; no red | a clean-ish black/white screen |
 | **Fast frame** in an open session: planes + 1 pull | 1.07 s (946 ms pull + ~120 ms transfer) | whole panel flashes each frame; ghosting builds up | badge os `ui_wipe` (one black, one white frame) |
 | **Refresh window** (DRFW 0x90 y range) | ~490 ms pull for a y window | copies rows 0..y1 down the panel | never: keep DRFW `00 3B 00 A9` |
-| **Calm partial** (`part_start`): film state in 0x11, new frame in 0x10, 10 one-frame groups, scan limited to the changed rows (at least 336, a + b + 1 >= 680) | 237 ms full height, ~125 ms for changes in the lower half | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
+| **Calm frame** (`epd_frame`): film state in 0x11, new frame in 0x10, a transition table of 10 one-frame groups, whole panel | 237 ms pull + ~35 ms to send the frame | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
 
 ### Timing details
 - A pull (`0x15 3C`) plays the latched waveform; its length follows the table: frames x ~23.7 ms. The badge team
@@ -116,19 +116,20 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - Do not drive the panel bus pins while the panel supply (GPIO48 / Q2) is off: it backfeeds the CoG through its
   ESD diodes, and the badge team broke a panel that way. All firmware so far leaves GPIO48 alone (panel on).
 - Only GND / VDH / VDL / VDHR levels from the known tables; no level held for long; balanced shakes.
-- Partial updates open a fresh session every 60 frames (sessions of 60 are proven on the badge; the badge team
-  used 20 for its fast frames, reason not documented).
+- Frames open a fresh session every 60 pulls (sessions of 60 are proven on the badge; the badge team used 20 for its
+  fast frames, reason not documented).
 
 ## Sound
-- No speaker on the badge. badge os sends audio as PDM (1 bit, ~64x the sample rate) on an SAO port's two GPIOs:
-  GPIO1 = data, GPIO2 = clock; SAO2 (GPIO4 / GPIO5) unless Settings key `snd_sao` says otherwise.
+- No speaker on the badge. A Noisy Cricket SAO with the speaker firmware plays the sound when one is plugged in
+  (`components/cricket`). Otherwise badge os sends audio as PDM (1 bit, ~64x the sample rate) on an SAO port's two
+  GPIOs: GPIO1 = data, GPIO2 = clock; SAO2 (GPIO4 / GPIO5) unless Settings key `snd_sao` says otherwise.
 - Simplest add-on: a passive piezo buzzer from GPIO1 to GND (not an active buzzer: that one only beeps at its own
   pitch; a magnetic buzzer draws ~30 mA, so give it a transistor or at least ~100 ohm). Louder: a PDM-input amp
   (MAX98358) on both pins, or an RC low-pass (~1k + 10 nF) on the data pin into an analog amp (PAM8302).
 
 ## LEDs
 - 8x WS2812 on GPIO38, chained, powered from 3V3 (keep brightness low, ~12/255 is plenty). GRB order, 800 kHz:
-  the Pong app drives them with the RMT peripheral at 10 MHz (0 = 0.3/0.9 us, 1 = 0.9/0.3 us).
+  badge os drives them with the RMT peripheral at 10 MHz (0 = 0.3/0.9 us, 1 = 0.9/0.3 us): `components/os/leds.c`.
 - Status LED D6 on GPIO1. The charge LED D4 is driven by the charger, not the MCU.
 
 ## Power
@@ -138,7 +139,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 - GPIO14 (BAT_SENS) reads half of the LDO input: the battery voltage on battery, about VBUS - 0.3 V on USB.
   It is on ADC2, which shares hardware with Wi-Fi: expect failed reads while the radio is busy.
   badge os turns it into a percentage with a typical LiPo rest-voltage curve (3.3 V = 0 %, 4.2 V = 100 %),
-  and shows "USB" above 4.4 V (`battery_pct()` in main.c).
+  and shows "USB" above 4.4 V (`battery_pct()` in `components/os/power.c`).
 
 ## USB
 - USB-C wired to the ESP32-S3's native USB (no hub, no switch). Our firmware's console and esptool use the
@@ -156,7 +157,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
   beacons about once a second, power save off. FTM distances read right with no offset on our badges.
 - Pong uses ESP-NOW on channel 1 with Wi-Fi in station mode and power save off (modem sleep drops packets).
   ~250-byte packets, broadcast for pairing, unicast after.
-- Apps that join a network (Online update, Hackaday, News, Weather) stop ranging; the home screen restarts it.
+- Apps that join a network (Online update, Clock, Hackaday, Weather) stop ranging; the home screen restarts it.
 
 ## Flash
 - 8 MB. badge os: bootloader at 0x0, partition table at 0x8000, NVS at 0x9000 (24 KB), otadata at 0xF000,

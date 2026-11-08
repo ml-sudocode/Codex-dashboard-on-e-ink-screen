@@ -1,9 +1,10 @@
 // Display: apps draw into fb, ui_frame shows it with one calm whole-screen update and the OS top bar drawn over rows
 // 0..TOP-1. The panel itself is epd.c.
 //
-// A frame: wait for the previous pull, send the whole frame, start its pull, return. ui_frame so blocks only until
-// the previous pull is done (~0.24 s after it started) plus ~35 ms of SPI: ~3.5-4 frames/s, with the app drawing the
-// next frame meanwhile. The session (DC-DC up, the calm table latched) stays open between frames; ui_close ends it.
+// A frame: wait for the previous pull, send the whole frame, start its pull, return. So ui_frame blocks only until
+// the previous pull is done (~0.24 s after it started), plus ~35 ms of SPI: ~3.5-4 frames/s, with the app drawing
+// the next frame meanwhile. The session (DC-DC up, the calm table latched) stays open between frames; ui_close ends
+// it.
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
