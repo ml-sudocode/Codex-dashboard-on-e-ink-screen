@@ -31,7 +31,7 @@
 #define SHOT_V 32       // player shot, px per tick
 #define BOMB_V 12       // alien shots, px per tick
 #define NB 3            // alien shots in the air at most
-#define BOOM_TICKS 5    // a hit alien shows a burst this long (one or two frames at ~4-7 frames/s)
+#define BOOM_TICKS 5    // a hit alien shows a burst this long (about one frame at ~3.5-4 frames/s)
 #define DEAD_TICKS 30   // a hit gun freezes the game this long
 #define KNOB_DIR 1      // flip to -1 if turning the knob clockwise moves the gun the wrong way
 

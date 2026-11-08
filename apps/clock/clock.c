@@ -21,7 +21,7 @@ static const char *TAG = "clock";
 #define TZ_DEFAULT "PST8PDT,M3.2.0,M11.1.0"
 #define CON_NAME "Hackaday Supercon X"
 #define RESYNC_S (6 * 3600)
-#define WIPE_S 3600 // partial updates leave ghosts: shake them off this often
+#define WIPE_S 3600 // frames leave ghosts: shake them off this often
 
 #define LEFT 288       // name column width; the dial window is the rest, below the top bar
 #define WX LEFT

@@ -96,8 +96,7 @@ static void message(const char *title, const char *s, const char *small)
     ui_close();
 }
 
-// A frame scans only the changed rows, fastest in the lower half: the bar, the number and the note live there
-// (~0.13 s a step), the static text above. The bar only grows; the number and note leave a light ghost.
+// The bar only grows; the number and the note leave a light ghost.
 static void progress(const char *title, const char *line, int p, const char *note)
 {
     char s[8];
@@ -137,8 +136,8 @@ static void wired(void)
         if (pct == -3) esp_restart(); // home, with the badge back on the Mac
 
         ui_keys(NULL, NULL, NULL, NULL);
-        // Copying: redraw whenever the number moved. ui_frame hands the frame to the panel task and returns, so the
-        // loop runs at the panel's pace while the copy task keeps going.
+        // Copying: redraw whenever the number moved. ui_frame returns while the panel pulls, so the loop runs at the
+        // panel's pace while the copy task keeps going.
         for (int shown = -1; pct >= 0 && pct <= 100;) {
             int p = pct;
             if (p == shown) {
@@ -196,7 +195,7 @@ static void run(void)
             memset(fb, 0, sizeof fb);
             text(48, TOP + 24, 6, "Update", true);
             for (int i = 0; i < n; i++) {
-                text(112, 344 + i * 120, 4, name[i], true); // low on the screen: a move scans fewer rows
+                text(112, 344 + i * 120, 4, name[i], true);
                 if (i == sel) outline(80, 312 + i * 120, 800, 96, 8);
             }
             ui_keys("Up", "Down", "Pick", "Pick");

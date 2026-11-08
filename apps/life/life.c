@@ -1,5 +1,5 @@
 // Conway's Game of Life: 60 x 39 = 2340 cells of 16 px below the top bar, edges wrap around. Nobody plays: a random
-// soup runs one generation per frame (~0.5 s) until it dies out, settles (same as 1 or 2 generations ago) or hits
+// soup runs one generation per frame (~0.27 s) until it dies out, settles (same as 1 or 2 generations ago) or hits
 // MAX_GEN, then a fresh soup starts after a wipe. Any button goes home.
 #include <string.h>
 #include "esp_random.h"

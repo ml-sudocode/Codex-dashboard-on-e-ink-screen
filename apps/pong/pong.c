@@ -1,5 +1,5 @@
 // Pong between two badges over ESP-NOW, in real time: the host steps the game every STEP_MS in pixels and the
-// panel shows the latest state as fast as it can (~4-7 frames/s). The badge with the lower MAC is the host: it owns
+// panel shows the latest state as fast as it can (~3.5-4 frames/s). The badge with the lower MAC is the host: it owns
 // the ball; the guest shows the host's state and sends its paddle. Both screens show their own player on the left.
 // Any button starts pairing (press on both badges at once); in a game hold MENU + to move up, A to move down.
 // The AS5600 knob add-on (knob_angle(), plug in any time) moves the paddle too.
@@ -103,7 +103,7 @@ static void pong_step(game_t *g, int64_t now, int8_t *sdx, int64_t *serve_at, ui
     }
 }
 
-// Renders the latest state as fast as the panel goes (~4-7 frames/s); the game runs on the link task's clock.
+// Renders the latest state as fast as the panel goes (~3.5-4 frames/s); the game runs on the link task's clock.
 static void pong(void)
 {
     ESP_LOGI(TAG, "%s, %s paddle", host ? "host" : "guest", host ? "left" : "right");

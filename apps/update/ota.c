@@ -57,7 +57,7 @@ static void draw_task(void *caller)
             text(48, y, lines[i].scale, lines[i].s, true);
             y += 8 * lines[i].scale + 24;
         }
-        if (pct >= 0) { // at the bottom: frames that change only low rows are the quickest
+        if (pct >= 0) { // at the bottom
             outline(48, H - 112, 864, 64, 6);
             box(60, H - 100, 840 * pct / 100, 40, true); // only grows: ink is added, never erased
         }

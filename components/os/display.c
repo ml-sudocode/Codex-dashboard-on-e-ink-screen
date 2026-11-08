@@ -1,12 +1,16 @@
-// Display: apps draw into fb, ui_frame shows it with one calm partial update (only changed pixels move), with the OS
-// top bar drawn over rows 0..TOP-1. The panel itself is epd.c.
+// Display: apps draw into fb, ui_frame shows it with one calm whole-screen update and the OS top bar drawn over rows
+// 0..TOP-1. The panel itself is epd.c.
+//
+// A frame: wait for the previous pull, send the whole frame, start its pull, return. ui_frame so blocks only until
+// the previous pull is done (~0.24 s after it started) plus ~35 ms of SPI: ~3.5-4 frames/s, with the app drawing the
+// next frame meanwhile. The session (DC-DC up, the calm table latched) stays open between frames; ui_close ends it.
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 #include "esp_app_desc.h"
 #include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "cricket.h"
@@ -14,14 +18,15 @@
 #include "badge/os.h"
 #include "epd.h"
 
+static const char *TAG = "os";
 EXT_RAM_BSS_ATTR uint8_t fb[PLANE]; // in PSRAM: internal RAM is needed for Wi-Fi and TLS (Online update)
+static EXT_RAM_BSS_ATTR uint8_t shown[PLANE]; // what the film shows; ui_wipe leaves both all white
+static int pulls = -1;               // pulls in the open session, -1 = no session
+static bool pulling;                 // a pull may still run: epd_wait before the next command
+static SemaphoreHandle_t lock;       // one panel user at a time: apps draw from more than one task
 static const char *bar_app = "Home"; // the name in the top bar
-static const char *keys[4];           // ui_keys: what BTN_PLUS, BTN_MINUS, BTN_A, BTN_B do now
-volatile bool in_app;                 // an app is running: MENU + and MENU - held together go home
-static SemaphoreHandle_t panel_lock;  // recursive: one panel user at a time
-static EXT_RAM_BSS_ATTR uint8_t part_next[PLANE]; // the frame ui_frame handed over
-static volatile bool part_pending;    // ... and the panel task has not started it yet
-static TaskHandle_t panel_task;
+static const char *keys[4];          // ui_keys: what BTN_PLUS, BTN_MINUS, BTN_A, BTN_B do now
+volatile bool in_app;                // an app is running: MENU + and MENU - held together go home
 
 // Top bar (rows 0..TOP-1) on every screen, drawn over fb by ui_frame. The buttons sit two in each top corner,
 // MENU + above A on the left, MENU - above B on the right: each label (ui_keys) sits beside its button, with a tab at
@@ -74,78 +79,69 @@ void ui_keys(const char *plus, const char *minus, const char *a, const char *b)
     keys[BTN_PLUS] = plus, keys[BTN_MINUS] = minus, keys[BTN_A] = a, keys[BTN_B] = b;
 }
 
-#define LOCK() xSemaphoreTakeRecursive(panel_lock, portMAX_DELAY)
-#define UNLOCK() xSemaphoreGiveRecursive(panel_lock)
-
-// The panel task starts every frame, then waits for the pull without the lock, so ui_frame can hand over the next
-// frame meanwhile and the app draws while the panel pulls. While the screen sits still it does the 60-pull
-// session reopen, so a frame does not pay for it.
-static void panel_run(void *arg)
+// The pull in flight done, the session closed. Under the lock.
+static void panel_off(void)
 {
-    for (;;) {
-        bool idle = !ulTaskNotifyTake(pdTRUE, part_n >= 40 ? pdMS_TO_TICKS(500) : portMAX_DELAY);
-        LOCK();
-        if (part_pending) part_pending = false, part_start(part_next);
-        else if (idle && part_n >= 40) epd_sleep(), part_open();
-        UNLOCK();
-        part_wait();
-    }
+    if (pulling) epd_wait(), pulling = false;
+    if (pulls >= 0) epd_close();
+    pulls = -1;
 }
 
-// Hands the frame over and returns while the panel works; waits only while the previous frame has not started, so
-// an app that calls it in a loop runs at the panel's pace with its drawing overlapping the pulls.
-void ui_frame(int pulls)
+void ui_frame(int unused)
 {
-    (void)pulls; // a partial update is one pull whatever was asked
-    while (part_pending) ms(1);
-    LOCK();
+    xSemaphoreTake(lock, portMAX_DELAY);
     draw_bar();
-    memcpy(part_next, fb, PLANE);
-    part_pending = true;
-    UNLOCK();
-    xTaskNotifyGive(panel_task);
+    if (memcmp(fb, shown, PLANE)) { // no change, no refresh
+        int64_t t0 = esp_timer_get_time();
+        if (pulling) epd_wait(), pulling = false;
+        int64_t t1 = esp_timer_get_time();
+        if (pulls == 60) panel_off(); // a fresh session every 60 pulls: sessions of 60 are proven, longer ones are not
+        if (pulls < 0) {
+            epd_reset();
+            epd_start(EPD_CALM);
+            epd_load(shown, shown); // 0x11 must hold what the film shows
+            pulls = 0;
+        }
+        epd_frame(fb);
+        memcpy(shown, fb, PLANE);
+        pulls++, pulling = true;
+        ESP_LOGD(TAG, "frame %d: %d ms waiting for the panel, %d ms sending", pulls, (int)((t1 - t0) / 1000),
+                 (int)((esp_timer_get_time() - t1) / 1000));
+    }
+    xSemaphoreGive(lock);
 }
 
-// The frame handed over, if any, on the panel; nothing running. Under the lock.
-static void panel_flush(void)
-{
-    part_wait();
-    if (part_pending) part_pending = false, part_start(part_next), part_wait();
-}
-
-// Partial updates leave light ghosts of erased ink; a scene change shakes the film with the short black/white
-// waveform (all black, then all white, ~2.8 s) and leaves the panel and the driver agreeing on white.
+// Frames leave light ghosts of erased ink; a scene change shakes the film with the short black/white waveform (all
+// black, then all white, ~2.8 s) and leaves the panel and the driver agreeing on white.
 void ui_wipe(void)
 {
-    LOCK();
-    part_pending = false; // drawn before the wipe: gone with it
-    epd_sleep();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    panel_off();
     memset(fb, 0xFF, sizeof fb);
-    epd_open(fb);
+    epd_reset();
+    epd_load(fb, NULL);
+    epd_start(EPD_FAST);
     epd_pull(5000);
-    epd_load(NULL); // both planes: after the pull 0x11 holds the black frame, which would select red
+    epd_load(NULL, NULL); // both planes: after the pull 0x11 holds the black frame, which would select red
     epd_pull(5000);
     epd_close();
     memset(fb, 0, sizeof fb);
-    memset(part_shown, 0, sizeof part_shown);
-    UNLOCK();
+    memset(shown, 0, sizeof shown);
+    xSemaphoreGive(lock);
 }
 
 void ui_close(void)
 {
-    LOCK();
-    panel_flush();
-    epd_sleep();
-    UNLOCK();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    panel_off();
+    xSemaphoreGive(lock);
 }
 
-// Every restart (going home, an app's esp_restart) finishes the panel's work and closes the session: never cut the
-// panel off mid-refresh.
+// Every restart (going home, an app's esp_restart) lets the pull in flight finish and closes the session: never cut
+// the panel off mid-refresh. The lock stays taken: no frame after this one.
 static void panel_shutdown(void)
 {
-    if (!xSemaphoreTakeRecursive(panel_lock, pdMS_TO_TICKS(3000))) return;
-    panel_flush(); // a last frame handed over just before the restart ("Saved, restarting") still shows
-    epd_sleep();
+    if (xSemaphoreTake(lock, pdMS_TO_TICKS(3000))) panel_off();
 }
 
 void os_app(const char *name)
@@ -157,7 +153,6 @@ void os_app(const char *name)
 void display_init(void)
 {
     epd_init();
-    panel_lock = xSemaphoreCreateRecursiveMutex();
-    xTaskCreate(panel_run, "panel", 4096, NULL, 5, &panel_task);
+    lock = xSemaphoreCreateMutex();
     esp_register_shutdown_handler(panel_shutdown);
 }

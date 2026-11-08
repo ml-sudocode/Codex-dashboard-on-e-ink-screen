@@ -18,7 +18,7 @@ void app_main(void)
     buttons_init();
     leds_init(); // off: they still show whatever ran before the reset
 
-    ui_wipe(); // the film still shows whatever ran before the reset; partial updates need a known start
+    ui_wipe(); // the film still shows whatever ran before the reset; frames need a known start
     battery_pct(); // one reading before Wi-Fi starts sharing ADC2
     ranging_start(); // on every screen, so other badges' Radar sees this one; apps that take the radio stop it
     home();
