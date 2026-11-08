@@ -69,6 +69,10 @@ bool cfg_set(const char *key, const char *val);
 #define IMG_BYTES (W * (H - TOP) / 8)
 bool cfg_get_image(uint8_t *img); // false if none saved
 bool cfg_set_image(const uint8_t *img); // NULL deletes it
+// LED bar: 8 WS2812, LED 0 at the left end as you look at the badge, {r, g, b} each 0-255 (~12 is plenty: they
+// run from 3V3). They keep their colours until set again; the OS turns them off at boot and back home.
+#define LEDS 8
+void leds(const uint8_t rgb[LEDS][3]);
 int knob_angle(void); // AS5600 knob add-on on an SAO port: 0-4095 per turn, -1 if none or no magnet (plug in any time)
 int battery_pct(void); // 0-100 on battery, -1 on USB power, -2 unknown; a failed read (ADC2 vs Wi-Fi) repeats the last
 

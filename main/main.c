@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
+#include "driver/rmt_tx.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_app_desc.h"
@@ -620,13 +621,12 @@ void wifi_off(void)
 #define RNG_CH 1
 #define RNG_FRAMES 16       // FTM frames per session (API: 0, 16, 24, 32, 64): two bursts of 8
 #define RNG_PERIOD 2        // FTM burst period, 100 ms units
-#define RNG_WAIT_MS 2000    // for the FTM report: ~3x the session time once RNG_TUNE has measured it
+#define RNG_WAIT_MS 1000    // for the FTM report: a (16, 2) session took ~0.3 s on our badges
 #define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (checked side by side)
 #define RNG_KEEP 128        // pairs kept, own and shared: n badges share up to n * 8 (about 80 with 10 badges)
 #define RNG_SHARE 8         // own ranges per BOSR beacon (v0.8 badges reject more)
 #define RNG_FAST 16         // results per BOSF packet
 #define RNG_STALE_US 30000000LL // a pair not heard of for 30 s is dropped
-// #define RNG_TUNE         // timing test: every session tries the next FTM setting and logs its time
 
 // Two ESP-NOW packets on channel 1. BOSR, ~1 s: the sender's SoftAP (where to aim FTM), its latest ranges and its
 // username; v0.8 badges know only this one, so it stays byte for byte as it was. BOSF, ~250 ms, badges after v0.8:
@@ -785,12 +785,6 @@ static void rng_task(void *arg)
         }
         next = found + 1;
         wifi_ftm_initiator_cfg_t cfg = {.channel = RNG_CH, .frm_count = RNG_FRAMES, .burst_period = RNG_PERIOD};
-#ifdef RNG_TUNE
-        static const uint8_t try[4][2] = {{16, 0}, {8, 0}, {16, 1}, {16, 2}};
-        static int tune;
-        cfg.frm_count = try[tune][0], cfg.burst_period = try[tune][1], tune = (tune + 1) % 4;
-        int64_t t0 = esp_timer_get_time();
-#endif
         memcpy(cfg.resp_mac, ap, 6);
         xEventGroupClearBits(wifi_ev, 2);
         esp_err_t e = esp_wifi_ftm_initiate_session(&cfg);
@@ -804,10 +798,6 @@ static void rng_task(void *arg)
                 break;
             }
         }
-#ifdef RNG_TUNE
-        ESP_LOGI(TAG, "tune %02x%02x frames %d period %d: %s %d ms, %d cm", b[4], b[5], cfg.frm_count, cfg.burst_period,
-                 ok ? "ok" : "FAIL", (int)((esp_timer_get_time() - t0) / 1000), ok ? ftm_cm : -1);
-#endif
         if (ok) {
             int cm = MAX(0, ftm_cm - RNG_OFFSET_CM);
             xSemaphoreTake(rng_lock, portMAX_DELAY);
@@ -1041,6 +1031,44 @@ int battery_pct(void)
     for (int i = 1; i < 9; i++)
         if (vin < v[i]) return last = p[i - 1] + (p[i] - p[i - 1]) * (vin - v[i - 1]) / (v[i] - v[i - 1]);
     return last = 100;
+}
+
+// ---- LED bar: 8x WS2812 on GPIO38, RMT at 10 MHz (0: 0.3 us high, 0.9 us low; 1: 0.9 us high, 0.3 us low).
+// The LEDs keep their colours until told otherwise, a reset included: the OS turns them off at boot and back home.
+#define LED_FLIP 0 // 1 if LED 0 turns out to be on the right as you look at the badge
+static rmt_channel_handle_t led_ch;
+static rmt_encoder_handle_t led_enc;
+
+static void led_send(const uint8_t grb[3 * LEDS])
+{
+    rmt_transmit(led_ch, led_enc, grb, 3 * LEDS, &(rmt_transmit_config_t){0});
+    rmt_tx_wait_all_done(led_ch, 10);
+}
+
+static void led_init(void)
+{
+    ESP_ERROR_CHECK(rmt_new_tx_channel(&(rmt_tx_channel_config_t){.gpio_num = 38, .clk_src = RMT_CLK_SRC_DEFAULT,
+                                                                   .resolution_hz = 10000000, .mem_block_symbols = 64,
+                                                                   .trans_queue_depth = 1}, &led_ch));
+    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&(rmt_bytes_encoder_config_t){.bit0 = {.level0 = 1, .duration0 = 3, .duration1 = 9},
+                                                                         .bit1 = {.level0 = 1, .duration0 = 9, .duration1 = 3},
+                                                                         .flags.msb_first = 1}, &led_enc));
+    ESP_ERROR_CHECK(rmt_enable(led_ch));
+    static const uint8_t off[3 * LEDS];
+    led_send(off);
+}
+
+void leds(const uint8_t rgb[LEDS][3])
+{
+    static uint8_t grb[3 * LEDS]; // what the LEDs show (all off after led_init)
+    uint8_t out[3 * LEDS];
+    for (int i = 0; i < LEDS; i++) {
+        uint8_t *o = out + 3 * (LED_FLIP ? LEDS - 1 - i : i);
+        o[0] = rgb[i][1], o[1] = rgb[i][0], o[2] = rgb[i][2];
+    }
+    if (!memcmp(out, grb, sizeof grb)) return;
+    memcpy(grb, out, sizeof grb);
+    led_send(grb);
 }
 
 // ---- Top bar (rows 0..TOP-1) on every screen, drawn over fb by ui_frame. The buttons sit two in each top corner,
@@ -1328,6 +1356,7 @@ static void home(void)
         usb_host_lib_info_t usb;
         if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
         if (!rng_run) wifi_off(), ranging_start(); // the app took the radio: ranging gets it back
+        leds((const uint8_t[LEDS][3]){{0}});
         ui_wipe(); // and the app through the home screen
         btn_flush();
     }
@@ -1348,6 +1377,7 @@ void app_main(void)
     ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
     panel_lock = xSemaphoreCreateMutex();
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
+    led_init(); // off: they still show whatever ran before the reset
 
     ui_wipe(); // the film still shows whatever ran before the reset; partial updates need a known start
     battery_pct(); // one reading before Wi-Fi starts sharing ADC2

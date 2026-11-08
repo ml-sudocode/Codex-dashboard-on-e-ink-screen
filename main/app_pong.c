@@ -11,7 +11,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "driver/rmt_tx.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_now.h"
@@ -37,8 +36,6 @@ static const char *TAG = "pong";
 #define TRAIL 40     // ball positions kept for the trail, one per step (0.6 s, about one frame and a bit)
 #define WIN 4        // first to 4: the LED bar has 4 LEDs per player
 #define CHANNEL 1
-#define LED_GPIO 38
-#define LED_FLIP 0    // 1 if LED 0 turns out to be on the right as you look at the badge
 #define LED_ON 12     // WS2812 brightness, 0-255
 #define KNOB_TURN (CH - PADH) // paddle px per full knob turn: one turn crosses the court
 #define KNOB_DIR 1    // -1 if turning clockwise moves the paddle up instead of down
@@ -129,36 +126,6 @@ static void pong(void)
     in_pong = false;
     ui_keys("pair", "pair", "pair", "pair");
     ESP_LOGI(TAG, "over after %d frames: peer gone", frames);
-}
-
-// ---- LED bar: 8x WS2812, RMT at 10 MHz (0: 0.3 us high, 0.9 us low; 1: 0.9 us high, 0.3 us low).
-static rmt_channel_handle_t led_ch;
-static rmt_encoder_handle_t led_enc;
-
-static void led_init(void)
-{
-    ESP_ERROR_CHECK(rmt_new_tx_channel(&(rmt_tx_channel_config_t){.gpio_num = LED_GPIO, .clk_src = RMT_CLK_SRC_DEFAULT,
-                                                                   .resolution_hz = 10000000, .mem_block_symbols = 64,
-                                                                   .trans_queue_depth = 1}, &led_ch));
-    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&(rmt_bytes_encoder_config_t){.bit0 = {.level0 = 1, .duration0 = 3, .duration1 = 9},
-                                                                         .bit1 = {.level0 = 1, .duration0 = 9, .duration1 = 3},
-                                                                         .flags.msb_first = 1}, &led_enc));
-    ESP_ERROR_CHECK(rmt_enable(led_ch));
-}
-
-// LED 0 is the left end, as the court is seen on this badge.
-static void leds(const uint8_t rgb[8][3])
-{
-    static uint8_t grb[24];
-    uint8_t out[24];
-    for (int i = 0; i < 8; i++) {
-        uint8_t *o = out + 3 * (LED_FLIP ? 7 - i : i);
-        o[0] = rgb[i][1], o[1] = rgb[i][0], o[2] = rgb[i][2];
-    }
-    if (!memcmp(out, grb, sizeof grb)) return;
-    memcpy(grb, out, sizeof grb);
-    rmt_transmit(led_ch, led_enc, grb, sizeof grb, &(rmt_transmit_config_t){0});
-    rmt_tx_wait_all_done(led_ch, 10);
 }
 
 // Free: off (red for 0.5 s after a failed pairing or a lost peer). Seeking: blue. Playing: my points green from
@@ -291,7 +258,6 @@ static void link_task(void *arg)
 void app_pong(void)
 {
     game_task = xTaskGetCurrentTaskHandle();
-    led_init();
     rxq = xQueueCreate(16, sizeof(rx_t));
     radio_start();
     xTaskCreate(link_task, "link", 4096, NULL, 6, NULL);
