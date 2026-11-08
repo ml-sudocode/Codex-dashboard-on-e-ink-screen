@@ -355,11 +355,9 @@ static void task(void *arg)
     }
 }
 
-// Never returns: home is MENU + and MENU -.
-static void run(void)
+static void run(void) // never returns: home is MENU + and MENU -
 {
-    xTaskCreate(task, "weather", 16384, NULL, 4, NULL);
-    vTaskSuspend(NULL);
+    task(NULL); // the home task's 16 KB stack is enough for TLS
 }
 
 static void icon(int x, int y) // a sun behind a cloud
