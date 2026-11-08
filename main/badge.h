@@ -70,6 +70,12 @@ bool cfg_set(const char *key, const char *val);
 #define IMG_BYTES (W * (H - TOP) / 8)
 bool cfg_get_image(uint8_t *img); // false if none saved
 bool cfg_set_image(const uint8_t *img); // NULL deletes it
+// Sound through an add-on on an SAO port (PDM on its two GPIOs; Settings "snd_sao" picks the port, SAO2 by default).
+// snd_start(rate) -> false if sound is off; then snd_write mono 16-bit samples at that rate (blocks while the ~30 ms
+// queue is full; gaps play silence); snd_stop when done (the OS also stops it back home).
+bool snd_start(int rate);
+void snd_write(const int16_t *pcm, int n);
+void snd_stop(void);
 // LED bar: 8 WS2812, LED 0 at the left end as you look at the badge, {r, g, b} each 0-255 (~12 is plenty: they
 // run from 3V3). They keep their colours until set again; the OS turns them off at boot and back home.
 #define LEDS 8
@@ -94,3 +100,4 @@ void app_clock(void);
 void app_settings(void);
 void app_weather(void);
 void app_video(void);
+void app_doom(void);

@@ -14,6 +14,7 @@
   - `app-rocks`: `main/app_rocks.c`
   - `app-radar`: `main/app_radar.c`
   - `app-hackaday`: `main/app_hackaday.c`
+  - `app-doom`: `main/app_doom.c`, `components/doom/` (the engine as its own component)
   - `app-badge`: `main/app_badge.c`
   - `app-settings`: `main/app_settings.c`
   - `app-weather`: `main/app_weather.c`

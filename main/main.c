@@ -11,6 +11,7 @@
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "driver/rmt_tx.h"
+#include "driver/i2s_pdm.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_app_desc.h"
@@ -1108,6 +1109,47 @@ int battery_pct(void)
     return last = 100;
 }
 
+// ---- Sound: an add-on on an SAO port gets the audio as PDM (1 bit at ~64x the sample rate) on the port's two GPIOs:
+// GPIO1 = data, GPIO2 = clock. A PDM-input amp (e.g. MAX98358) takes both; an analog amp (e.g. PAM8302) takes the data
+// pin through an RC low-pass (~1k + 10 nF). Settings key "snd_sao": the port "1"-"3", "0" = none; unset = SAO2
+// (SAO1 usually holds the knob, whose analog out is SAO1's GPIO1).
+static const int sao_gpio[3][2] = {{2, 42}, {4, 5}, {7, 6}}; // GPIO1, GPIO2 of SAO1..3
+static i2s_chan_handle_t snd;
+
+void snd_stop(void)
+{
+    if (!snd) return;
+    i2s_channel_disable(snd);
+    i2s_del_channel(snd);
+    snd = NULL;
+}
+
+bool snd_start(int rate)
+{
+    snd_stop();
+    char s[4] = "2";
+    cfg_get("snd_sao", s, sizeof s);
+    int port = s[0] - '1';
+    if (port < 0 || port > 2) return false;
+    i2s_chan_config_t c = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    c.auto_clear_after_cb = true; // nothing queued: silence, not the last buffer again
+    if (i2s_new_channel(&c, &snd, NULL) != ESP_OK) return snd = NULL, false;
+    i2s_pdm_tx_config_t p = {.clk_cfg = I2S_PDM_TX_CLK_DEFAULT_CONFIG(rate),
+                             .slot_cfg = I2S_PDM_TX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+                             .gpio_cfg = {.clk = sao_gpio[port][1], .dout = sao_gpio[port][0]}};
+    if (i2s_channel_init_pdm_tx_mode(snd, &p) != ESP_OK || i2s_channel_enable(snd) != ESP_OK) {
+        i2s_del_channel(snd);
+        return snd = NULL, false;
+    }
+    return true;
+}
+
+void snd_write(const int16_t *pcm, int n)
+{
+    size_t done;
+    if (snd) i2s_channel_write(snd, pcm, n * sizeof *pcm, &done, portMAX_DELAY);
+}
+
 // ---- LED bar: 8x WS2812 on GPIO38, RMT at 10 MHz (0: 0.3 us high, 0.9 us low; 1: 0.9 us high, 0.3 us low).
 // The LEDs keep their colours until told otherwise, a reset included: the OS turns them off at boot and back home.
 #define LED_FLIP 0 // 1 if LED 0 turns out to be on the right as you look at the badge
@@ -1337,6 +1379,15 @@ static void icon_video(int x, int y) // a play button on a screen
     for (int r = 0; r < 48; r++) box(x + 72, y + 64 + r, r < 24 ? r + 1 : 48 - r, 1, false);
 }
 
+static void icon_doom(int x, int y) // a crosshair down a corridor
+{
+    icon_base(x, y);
+    for (int k = 0; k < 40; k++) box(x + 24 + k, y + 24 + k, 3, 3, false), box(x + 149 - k, y + 24 + k, 3, 3, false),
+                                 box(x + 24 + k, y + 149 - k, 3, 3, false), box(x + 149 - k, y + 149 - k, 3, 3, false);
+    outline(x + 64, y + 64, 48, 48, 3);
+    box(x + 86, y + 76, 4, 24, false), box(x + 76, y + 86, 24, 4, false);
+}
+
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
 {
     icon_base(x, y);
@@ -1372,6 +1423,7 @@ static const app_t apps[] = {
     {"Video", icon_video, app_video},
     {"Weather", icon_weather, app_weather},
     {"Settings", icon_settings, app_settings},
+    {"Doom", icon_doom, app_doom},
 };
 #define NAPPS ((int)(sizeof apps / sizeof *apps))
 
@@ -1429,6 +1481,7 @@ static void home(void)
         ui_keys("< Left", "Right >", "Open", "Open");
         usb_host_lib_info_t usb;
         if (usb_host_lib_info(&usb) == ESP_OK) esp_restart(); // the app made USB a host: home must stay flashable
+        snd_stop();
         if (!rng_run) wifi_off(), ranging_start(); // the app took the radio: ranging gets it back
         leds((const uint8_t[LEDS][3]){{0}});
         ui_wipe(); // and the app through the home screen
