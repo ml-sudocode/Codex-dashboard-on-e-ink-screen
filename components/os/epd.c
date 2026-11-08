@@ -284,16 +284,22 @@ int epd_pull(int timeout_ms)
 
 // In a calm session 0x11 holds what the film shows: after every pull the CoG swaps its planes, so the frame just shown
 // is there. The next frame goes into 0x10, and the pull drives only the pixels where the two differ.
+static int64_t triggered; // when epd_frame started its pull
+
 void epd_frame(const uint8_t *next)
 {
     duw();
     for (int cog = LEFT; cog <= RIGHT; cog++) send_plane(cog, 0x10, next);
     drfw();
     CMD(BOTH, 0x15, 0x3C);
+    triggered = esp_timer_get_time();
 }
 
+// BUSY drops a few ms after the trigger, so a wait right after epd_frame (a ui_close straight after ui_frame) must not
+// read the still-high line as done: give it 5 ms, as epd_pull does.
 void epd_wait(void)
 {
+    while (esp_timer_get_time() - triggered < 5000) vTaskDelay(1);
     int64_t t0 = esp_timer_get_time();
     while (!(gpio_get_level(BUSY_L) && gpio_get_level(BUSY_R)) && esp_timer_get_time() - t0 < 3000000) vTaskDelay(1);
 }
