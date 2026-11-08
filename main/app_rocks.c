@@ -3,7 +3,8 @@
 // Rocks drift and wrap around the edges; a hit rock splits in two smaller ones, the smallest vanish. A cleared
 // field shakes the ghosts off the panel and brings more rocks. Three ships; game over shows the score for 3 s,
 // then a new game starts by itself.
-// Like Snake: the game ticks on its own clock, a second task shows the latest state whenever the panel is free.
+// Like Snake: the game ticks on its own clock (25/s), a second task hands the latest state to the panel whenever
+// it takes a frame (~4-7/s).
 // Everything is drawn as 3 px outlines that wrap around the play field, so a frame changes few pixels.
 #include <math.h>
 #include <stdio.h>
@@ -160,7 +161,7 @@ static void wave(int level)
     for (int n = level < 6 ? 3 + level : 8; n--;) {
         float x, y;
         do x = frand(0, W), y = frand(0, PH); while (hit(x, y, g.x, g.y, 260));
-        add_rock(x, y, 3, frand(30, 50 + 6 * level));
+        add_rock(x, y, 3, frand(40, 70 + 8 * level));
     }
 }
 
