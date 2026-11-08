@@ -552,6 +552,7 @@ int btn_held(void) { return held; }
 #endif
 static EventGroupHandle_t wifi_ev; // bit 0: got an IP, bit 1: an FTM report (ranging)
 static volatile int ftm_cm;        // last FTM result in cm, -1 failed
+static uint8_t ftm_peer[6];        // ... and whose SoftAP it was for
 static volatile bool wifi_join;    // keep (re)joining the badge Wi-Fi
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -561,6 +562,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_FTM_REPORT) { // ranging: one FTM session done
         wifi_event_ftm_report_t *r = data;
         ftm_cm = r->status == FTM_STATUS_SUCCESS ? (int)r->dist_est : -1;
+        memcpy(ftm_peer, r->peer_mac, 6);
         ESP_LOGD(TAG, "ftm %02x%02x: status %d, rtt %u ns, %u cm", r->peer_mac[4], r->peer_mac[5], r->status,
                  (unsigned)r->rtt_est, (unsigned)r->dist_est);
         xEventGroupSetBits(wifi_ev, 2);
@@ -618,6 +620,7 @@ void wifi_off(void)
 #define RNG_CH 1
 #define RNG_FRAMES 16       // FTM frames per session (API: 0, 16, 24, 32, 64): two bursts of 8
 #define RNG_PERIOD 2        // FTM burst period, 100 ms units
+#define RNG_WAIT_MS 2000    // for the FTM report: ~3x the session time once RNG_TUNE has measured it
 #define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (checked side by side)
 #define RNG_KEEP 128        // pairs kept, own and shared: n badges share up to n * 8 (about 80 with 10 badges)
 #define RNG_SHARE 8         // own ranges per BOSR beacon (v0.8 badges reject more)
@@ -792,7 +795,15 @@ static void rng_task(void *arg)
         xEventGroupClearBits(wifi_ev, 2);
         esp_err_t e = esp_wifi_ftm_initiate_session(&cfg);
         if (e != ESP_OK) ESP_LOGW(TAG, "ftm %02x%02x: start failed: %s", ap[4], ap[5], esp_err_to_name(e));
-        bool ok = e == ESP_OK && (xEventGroupWaitBits(wifi_ev, 2, true, true, pdMS_TO_TICKS(500)) & 2) && ftm_cm >= 0;
+        bool ok = false;
+        for (int64_t end = esp_timer_get_time() + RNG_WAIT_MS * 1000LL; e == ESP_OK;) { // a late report of an earlier
+            int64_t left = end - esp_timer_get_time();                                   // session: keep waiting
+            if (left <= 0 || !(xEventGroupWaitBits(wifi_ev, 2, true, true, pdMS_TO_TICKS(left / 1000 + 1)) & 2)) break;
+            if (!memcmp(ftm_peer, ap, 6)) {
+                ok = ftm_cm >= 0;
+                break;
+            }
+        }
 #ifdef RNG_TUNE
         ESP_LOGI(TAG, "tune %02x%02x frames %d period %d: %s %d ms, %d cm", b[4], b[5], cfg.frm_count, cfg.burst_period,
                  ok ? "ok" : "FAIL", (int)((esp_timer_get_time() - t0) / 1000), ok ? ftm_cm : -1);
