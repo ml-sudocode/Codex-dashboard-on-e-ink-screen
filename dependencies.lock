@@ -62,7 +62,7 @@ dependencies:
       - if: target not in ["linux"]
       version: ^1.0.0
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     targets:
     - esp32s2
@@ -104,6 +104,7 @@ dependencies:
 direct_dependencies:
 - espressif/esp-serial-flasher
 - espressif/qrcode
-manifest_hash: ef18ed827d11126af2fac4d44e960969fd90bbb73f811962790aa10685cfea81
+- espressif/usb_host_cdc_acm
+manifest_hash: ba80b28658f305d7c7f06e51c85d0f4ffb08db18fdb5ef52779905b926467339
 target: esp32s3
 version: 3.0.0
