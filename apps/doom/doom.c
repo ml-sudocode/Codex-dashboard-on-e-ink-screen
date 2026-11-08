@@ -233,12 +233,17 @@ static void read_buttons(void)
     knob_ref = a;
 }
 
+// The engine drains this until it returns 0, once per tic: read the buttons at most once per drain, so a release queued
+// for the next poll lands in the next tic (a press and its release in the same tic never reach the game: use, taps).
 int DG_GetKey(int *pressed, unsigned char *k)
 {
+    static bool polled;
     if (ki == kn) {
         ki = kn = 0;
+        if (polled) return polled = false, 0;
         read_buttons();
         if (!kn) return 0;
+        polled = true;
     }
     *pressed = keyq[ki] >> 8;
     *k = keyq[ki++];
