@@ -1,21 +1,27 @@
-// Radar: badges running badge os nearby, by id (last 4 hex digits of the MAC) and distance (OS ranging, Wi-Fi FTM).
-// With 2+ measured badges (3 with this one) it also draws a 2D map centred on this badge, fitted to every shared distance.
-// No compass: the map's rotation and mirror are arbitrary (kept steady between frames).
+// Radar: badges running badge os nearby, by name (or the last 4 hex digits of the MAC) and distance (OS ranging,
+// Wi-Fi FTM). With 2+ measured badges (3 with this one) it also draws a 2D map centred on this badge, fitted to
+// every shared distance. No compass: the map's rotation and mirror are arbitrary (kept steady between frames).
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "badge.h"
+#include "esp_attr.h"
+#include "esp_timer.h"
 
-#define NODES 9        // me + up to 8 badges
+#define NODES 32       // me + up to 31 badges
 #define MAP_X 384      // map area: x MAP_X..W, y TOP..H
 #define MAP_R 270      // px from the map centre to the outer ring
 #define SNAP 6         // px grid for dots: small wobble in the fit does not redraw the panel
+#define FRAME_MS 500   // one frame per panel refresh (~0.48 s): every frame can show new distances
 
 typedef struct { uint8_t mac[6]; float x, y; } node_t;
 
-static node_t nd[NODES];   // [0] = me at (0, 0); positions in metres, kept between frames
+static node_t nd[NODES]; // [0] = me at (0, 0); positions in metres, kept between frames
 static int nn;
-static float dist[NODES][NODES]; // metres, < 0 unknown
+// In PSRAM: internal RAM is kept for Wi-Fi and TLS (as fb in main.c).
+EXT_RAM_BSS_ATTR static range_t rg[1024]; // 32 badges: 992 directed pairs
+EXT_RAM_BSS_ATTR static float dist[NODES][NODES], sum[NODES][NODES]; // metres, dist < 0 unknown
+EXT_RAM_BSS_ATTR static int cnt[NODES][NODES];
 
 // What a badge is called on screen: its username if known (mine from Settings), else its 4-hex id. The MAC stays the key.
 static void id_of(const uint8_t *mac, char *s)
@@ -34,17 +40,16 @@ static int find(const node_t *v, int n, const uint8_t *mac)
 
 // Fit positions to the known distances, me pinned at the origin. Each badge moves to the average of where each
 // known distance alone would put it (a stress-majorization step); starting from last frame keeps the map steady.
-// ponytail: plain fixed-iteration relaxation, fine for 9 nodes; weight edges by age if the map gets jumpy.
-static void fit(void)
+static void fit(int iters)
 {
-    for (int it = 0; it < 200; it++)
+    for (int it = 0; it < iters; it++)
         for (int i = 1; i < nn; i++) {
             float sx = 0, sy = 0;
             int k = 0;
             for (int j = 0; j < nn; j++) {
                 if (j == i || dist[i][j] < 0) continue;
-                float dx = nd[i].x - nd[j].x, dy = nd[i].y - nd[j].y, l = hypotf(dx, dy);
-                if (l < 1e-3f) dx = 0.01f * (i - j), dy = 0.01f, l = hypotf(dx, dy); // coincident: nudge apart
+                float dx = nd[i].x - nd[j].x, dy = nd[i].y - nd[j].y, l = sqrtf(dx * dx + dy * dy);
+                if (l < 1e-3f) dx = 0.01f * (i - j), dy = 0.01f, l = sqrtf(dx * dx + dy * dy); // coincident: nudge apart
                 sx += nd[j].x + dist[i][j] * dx / l, sy += nd[j].y + dist[i][j] * dy / l, k++;
             }
             if (k) nd[i].x = sx / k, nd[i].y = sy / k;
@@ -60,25 +65,22 @@ static float stress(void) // sum of squared distance errors, m^2
     return e;
 }
 
-// The fit can fold into a wrong local minimum, so also try fresh starts (each badge on its ring around me, angles
-// shuffled per try) and keep the best. Last frame's layout wins unless a fresh one is clearly better: a steady map.
-static void layout(const int *cm)
+// One frame of layout: refine last frame's map, then try one fresh start (each badge on its ring around me, angles
+// shuffled by try) in case the map folded into a wrong local minimum; the fresh one is kept only if clearly better.
+// ponytail: ~130k inner steps per frame at 32 badges; fewer fit iterations if that ever slows the frame rate.
+static void layout(const int *cm, int try)
 {
-    node_t best[NODES];
-    fit();
-    float bs = stress();
-    memcpy(best, nd, sizeof nd);
-    for (int t = 1; t <= 8; t++) {
-        for (int i = 1; i < nn; i++) {
-            float a = (nd[i].mac[5] * 256 + nd[i].mac[4]) * 2 * (float)M_PI / 65536 + t * i * 2.4f;
-            float d = cm[i] < 0 ? 1 : cm[i] / 100.0f;
-            nd[i].x = d * cosf(a), nd[i].y = d * sinf(a);
-        }
-        fit();
-        float e = stress();
-        if (e < 0.8f * bs - 0.01f) bs = e, memcpy(best, nd, sizeof nd);
+    fit(30);
+    node_t keep[NODES];
+    memcpy(keep, nd, sizeof nd);
+    float was = stress();
+    for (int i = 1; i < nn; i++) {
+        float a = (nd[i].mac[5] * 256 + nd[i].mac[4]) * 2 * (float)M_PI / 65536 + try * i * 2.4f;
+        float d = cm[i] < 0 ? 1 : cm[i] / 100.0f;
+        nd[i].x = d * cosf(a), nd[i].y = d * sinf(a);
     }
-    memcpy(nd, best, sizeof nd);
+    fit(100);
+    if (!(stress() < 0.8f * was - 0.01f)) memcpy(nd, keep, sizeof nd);
 }
 
 static void ring(int cx, int cy, int r) // dotted circle
@@ -90,14 +92,12 @@ static int snap(float v) { return (int)lroundf(v / SNAP) * SNAP; }
 
 void app_radar(void)
 {
-    static range_t r[64];
-    static float sum[NODES][NODES];
-    static int cnt[NODES][NODES];
     uint8_t me[6];
     ranging_me(me);
     ui_keys(NULL, NULL, "clear ghosts", "home");
-    for (;;) {
-        int n = ranging_get(r, 64);
+    for (int frame = 0;; frame++) {
+        int64_t t0 = esp_timer_get_time();
+        int n = ranging_get(rg, 1024);
 
         // Nodes: me, then every badge I hear, measured ones first, nearest first; known positions carried over.
         node_t old[NODES];
@@ -107,11 +107,11 @@ void app_radar(void)
         memcpy(nd[0].mac, me, 6), nd[0].x = nd[0].y = 0;
         int cm[NODES] = {0}, measured = 0;
         for (int i = 0; i < n && nn < NODES; i++) {
-            if (memcmp(r[i].a, me, 6) || find(nd, nn, r[i].b) >= 0) continue;
+            if (memcmp(rg[i].a, me, 6) || find(nd, nn, rg[i].b) >= 0) continue;
             int k = nn++;
-            memcpy(nd[k].mac, r[i].b, 6);
-            cm[k] = r[i].cm;
-            measured += r[i].cm >= 0;
+            memcpy(nd[k].mac, rg[i].b, 6);
+            cm[k] = rg[i].cm;
+            measured += rg[i].cm >= 0;
             for (; k > 1 && (cm[k - 1] < 0 ? 1e9 : cm[k - 1]) > (cm[k] < 0 ? 1e9 : cm[k]); k--) { // insertion sort
                 node_t t = nd[k]; nd[k] = nd[k - 1]; nd[k - 1] = t;
                 int c = cm[k]; cm[k] = cm[k - 1]; cm[k - 1] = c;
@@ -128,31 +128,38 @@ void app_radar(void)
         // Distances between any two listed badges: mine and shared, both directions averaged.
         memset(sum, 0, sizeof sum), memset(cnt, 0, sizeof cnt);
         for (int i = 0; i < n; i++) {
-            int a = find(nd, nn, r[i].a), b = find(nd, nn, r[i].b);
-            if (a < 0 || b < 0 || a == b || r[i].cm < 0) continue;
-            sum[a][b] += r[i].cm / 100.0f, cnt[a][b]++;
-            sum[b][a] += r[i].cm / 100.0f, cnt[b][a]++;
+            int a = find(nd, nn, rg[i].a), b = find(nd, nn, rg[i].b);
+            if (a < 0 || b < 0 || a == b || rg[i].cm < 0) continue;
+            sum[a][b] += rg[i].cm / 100.0f, cnt[a][b]++;
+            sum[b][a] += rg[i].cm / 100.0f, cnt[b][a]++;
         }
         for (int i = 0; i < nn; i++)
             for (int j = 0; j < nn; j++) dist[i][j] = cnt[i][j] ? sum[i][j] / cnt[i][j] : -1;
 
+        // List: name with the distance on the line below; when those rows no longer fit, one compact line each.
         memset(fb, 0, sizeof fb);
-        char s[32], id[13];
+        char s[40], id[13];
+        bool fits = (nn - 1) * 56 <= H - TOP - 64; // 10 rows
         id_of(me, id);
         snprintf(s, sizeof s, "me %s", id);
-        text(24, TOP + 16, 3, s, true);
+        text(24, TOP + (fits ? 16 : 8), fits ? 3 : 2, s, true);
         for (int i = 1; i < nn; i++) {
+            char d[12] = "...";
+            if (cm[i] >= 0) snprintf(d, sizeof d, "%4.1f m", cm[i] / 100.0f);
             id_of(nd[i].mac, id);
-            text(24, TOP + 8 + 64 * i, 3, id, true); // name up to 12 chars, distance on the line below
-            if (cm[i] < 0) snprintf(s, sizeof s, "...");
-            else snprintf(s, sizeof s, "%4.1f m", cm[i] / 100.0f);
-            text(72, TOP + 36 + 64 * i, 3, s, true);
+            if (fits) {
+                text(24, TOP + 8 + 56 * i, 3, id, true);
+                text(72, TOP + 36 + 56 * i, 3, d, true);
+            } else { // up to 31 rows of 19 px
+                snprintf(s, sizeof s, "%-12s %s", id, d);
+                text(24, TOP + 13 + 19 * i, 2, s, true);
+            }
         }
         if (nn == 1) text(24, TOP + 96, 3, "Looking...", true);
 
         int cx = MAP_X + (W - MAP_X) / 2, cy = TOP + (H - TOP) / 2;
         if (measured >= 2) { // 3 badges with this one
-            layout(cm);
+            layout(cm, frame);
             float far = 0;
             for (int i = 1; i < nn; i++)
                 if (cm[i] >= 0) far = fmaxf(far, hypotf(nd[i].x, nd[i].y));
@@ -178,9 +185,10 @@ void app_radar(void)
         } else {
             text(MAP_X + 24, cy - 12, 3, "Map: needs 3+ badges", true);
         }
-        ui_frame(1); // no change since the last frame = no refresh
+        ui_frame(1); // ~0.48 s when something changed; no change since the last frame = no refresh
 
-        int b = btn_get(1000);
+        int left = FRAME_MS - (int)((esp_timer_get_time() - t0) / 1000);
+        int b = btn_get(left > 0 ? left : 0);
         if (b == BTN_A) ui_wipe();
         if (b == BTN_B) return; // the OS keeps ranging on every screen
     }
