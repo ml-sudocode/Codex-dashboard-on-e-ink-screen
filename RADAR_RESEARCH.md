@@ -120,3 +120,36 @@ badges, then grow into **B** if the numbers hold. C only if B looks good at the 
 6. BLE RSSI log-distance study, ELKHA Jurnal Teknik Elektro 2025,
    [record](https://garuda.kemdiktisaintek.go.id/documents/detail/5507138)
 7. [ESP-AirTag distance docs (path-loss exponents)](https://grgevansdwy.github.io/ESP-AirTag/distance_8cpp.html)
+
+## 8. Phase 2 spec: faster ranging that leaves v0.8 badges as they are (for idfport)
+
+Constraint (owner): a badge on v0.8 must see exactly what it sees today and never get more FTM requests than today.
+What v0.8 does (tag v0.8, `main/main.c`): its ESP-NOW callback drops anything that does not start with `BOSR` before
+taking its lock (line 664); it rejects beacons with more than 8 ranges and ignores bytes after the 12-byte name; it
+aims FTM at the `ap` address from our beacon on channel 1 (16 frames, burst period 2, 2 s wait, 50-150 ms pause);
+its table holds 32 pairs and already overflows with 8-10 badges, so more `BOSR` traffic would evict its own entries
+faster. Everything below changes updated badges only.
+
+**Step 0, timing (two updated badges).** Log every FTM session: peer, ms from initiate to report, status, cm. Try
+(frames 16, burst period 0), (8, 0), (16, 1) against today's (16, 2). Keep the fastest that keeps the success rate
+and still reads about 0 cm side by side (`RNG_OFFSET_CM` 0 was checked with (16, 2)).
+
+1. SoftAP `beacon_interval` 100 -> 1000 TU: the hidden AP's beacons do nothing for ranging (estimate: ~1.5 ms of
+   air each at 1 Mbps, ~1.3% of the channel per badge). Check once that a v0.8 badge still ranges an updated badge.
+2. FTM: the setting from step 0; report wait 2000 -> 500 ms; pause 50-150 -> 5-20 ms random.
+3. New fast packet `BOSF`, every 250 +- 50 ms, also when empty: `magic[4], n, n x {mac[6], int16 cm}` = the raw
+   results (after `RNG_OFFSET_CM`) of the sessions the sender completed since its previous `BOSF`, n <= 16.
+   The ~1 s `BOSR` beacon stays byte for byte as today (v0.8 never sees `BOSF`: wrong magic).
+   Receiving a `BOSF` from X (only once X's `BOSR` gave us its entry and `ap`): mark X as updated (time); each
+   (b, cm) becomes shared entry X->b as in `BOSR`; if b is me, record cm on my own entry me->X exactly like my own
+   measurement (into `hist`, min of last 4).
+4. Who measures, in the round robin: skip a peer whose own entry got a result (mine or from its `BOSF`) in the
+   last 400 ms. A peer not marked updated in the last 5 s is a v0.8 badge: at most one attempt per 5 s on it,
+   whatever the result (v0.8 itself gets to each peer every ~5-10 s, so its load does not rise).
+   Each pair of updated badges is then measured by whichever side gets there first and the other side reuses
+   it: about half the FTM traffic, and at most ~2.5 measurements/s per pair when few badges are around.
+
+Risk check: a v0.8 badge's FTM success rate on an updated badge while 2+ other updated badges range nearby,
+before and after. If it falls, lengthen the pause in 2.
+Expected: if a session takes ~50 ms, distances between updated badges refresh 1-2 times/s with 8-10 badges;
+pairs with a v0.8 badge stay as today. Radar needs no change (it reads `ranging_get` every ~0.5 s).
