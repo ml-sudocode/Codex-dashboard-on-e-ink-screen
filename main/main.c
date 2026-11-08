@@ -618,7 +618,7 @@ void wifi_off(void)
 #define RNG_CH 1
 #define RNG_FRAMES 16       // FTM frames per session (API: 0, 16, 24, 32, 64): two bursts of 8
 #define RNG_OFFSET_CM 0     // what FTM reads at 0 m, subtracted: 0 on our badges (checked side by side)
-#define RNG_KEEP 32         // ranges kept, own and shared
+#define RNG_KEEP 128        // pairs kept, own and shared: n badges share up to n * 8 (about 80 with 10 badges)
 #define RNG_SHARE 8         // own ranges per beacon
 #define RNG_STALE_US 30000000LL // a pair not heard of for 30 s is dropped
 
