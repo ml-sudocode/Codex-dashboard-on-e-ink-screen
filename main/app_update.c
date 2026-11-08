@@ -116,22 +116,24 @@ static void wired(void)
         if (pct == -3) esp_restart(); // home, with the badge back on the Mac
 
         ui_keys(NULL, NULL, NULL, NULL);
-        // Copying: redraw whenever the number moved; each frame takes ~0.5 s while the copy task keeps going.
+        // Copying: redraw whenever the number moved. ui_frame hands the frame to the panel task and returns, so the
+        // loop runs at the panel's pace while the copy task keeps going.
         for (int shown = -1; pct >= 0 && pct <= 100;) {
             int p = pct;
             if (p == shown) {
-                ms(100);
+                ms(20);
                 continue;
             }
             char s[8];
             snprintf(s, sizeof s, "%d%%", p);
             memset(fb, 0, sizeof fb);
-            // Only changed pixels move: the bar only grows, so just the number leaves a light ghost as it changes.
-            outline(48, TOP + 24, 720, 96, 6);
-            box(60, TOP + 36, 696 * p / 100, 72, true);
-            text(800, TOP + 56, 4, s, true);
-            text(48, 300, 4, "Updating connected badge", true);
-            text(48, 560, 3, "Wired update", true);
+            // A frame scans only the changed rows, fastest in the lower half: the bar and the number live there
+            // (~0.13 s a step), the static text above. The bar only grows; the number leaves a light ghost.
+            text(48, TOP + 24, 6, "Wired update", true);
+            text(48, 240, 4, "Updating connected badge", true);
+            outline(48, 448, 720, 96, 6);
+            box(60, 460, 696 * p / 100, 72, true);
+            text(800, 480, 4, s, true);
             ui_frame(1);
             shown = p;
         }
@@ -154,8 +156,8 @@ void app_update(void)
         memset(fb, 0, sizeof fb);
         text(48, TOP + 24, 6, "Update", true);
         for (int i = 0; i < 2; i++) {
-            text(112, 240 + i * 200, 5, name[i], true);
-            if (i == sel) outline(80, 208 + i * 200, 800, 104, 8);
+            text(112, 384 + i * 160, 5, name[i], true); // lower half: a move scans only those rows
+            if (i == sel) outline(80, 352 + i * 160, 800, 104, 8);
         }
         ui_keys("Up", "Down", "Pick", "Pick");
         ui_frame(1);
