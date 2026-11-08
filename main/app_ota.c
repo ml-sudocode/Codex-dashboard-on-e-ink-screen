@@ -42,9 +42,9 @@ static bool newer(const char *a, const char *b)
 // A draw task owns the panel and shows the latest log, so the network never waits for a refresh.
 static struct {
     char s[64];
-    int scale; // 0: the progress bar
+    int scale;
 } lines[8];
-static volatile int nlines, pct, want;
+static volatile int nlines, pct = -1, want; // pct < 0: no bar
 static volatile bool stop;
 
 static void draw_task(void *caller)
@@ -54,14 +54,12 @@ static void draw_task(void *caller)
         int g = want;
         memset(fb, 0, sizeof fb);
         for (int i = 0, y = TOP + 24; i < nlines; i++) {
-            if (lines[i].scale) {
-                text(48, y, lines[i].scale, lines[i].s, true);
-                y += 8 * lines[i].scale + 24;
-            } else {
-                outline(48, y, 864, 64, 6);
-                box(60, y + 12, 840 * pct / 100, 40, true); // only grows: ink is added, never erased
-                y += 64 + 24;
-            }
+            text(48, y, lines[i].scale, lines[i].s, true);
+            y += 8 * lines[i].scale + 24;
+        }
+        if (pct >= 0) { // at the bottom: frames that change only low rows are the quickest
+            outline(48, H - 112, 864, 64, 6);
+            box(60, H - 100, 840 * pct / 100, 40, true); // only grows: ink is added, never erased
         }
         ui_frame(1);
         if (stop && g == want) break;
@@ -119,7 +117,8 @@ static void run(void)
 {
     const char *ours = esp_app_get_description()->version;
     char s[64];
-    nlines = pct = want = 0;
+    nlines = want = 0;
+    pct = -1;
     stop = false;
     xTaskCreate(draw_task, "ota draw", 4096, xTaskGetCurrentTaskHandle(), 5, &drawer);
     say(6, "Online update");
@@ -163,7 +162,7 @@ static void run(void)
 
     snprintf(s, sizeof s, "Updating to v%s", img.version);
     say(4, s);
-    say(0, ""); // the bar
+    pct = 0;
     int size = esp_https_ota_get_image_size(h);
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int p = size > 0 ? (long long)esp_https_ota_get_image_len_read(h) * 100 / size : 0;
