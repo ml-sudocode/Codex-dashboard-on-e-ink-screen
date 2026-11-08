@@ -78,7 +78,7 @@ GPIO45 is listed as MISO in the stock driver but is not connected; it is a strap
 | **Fast full**: badge team table `lutb_base` at 0xB0, 3 pulls | ~3.5 s with the quick open | the whole panel flashes; black is grey-brown to maroon; no red | a clean-ish black/white screen |
 | **Fast frame** in an open session: planes + 1 pull | 1.07 s (946 ms pull + ~120 ms transfer) | whole panel flashes each frame; ghosting builds up | badge os `ui_wipe` (one black, one white frame) |
 | **Refresh window** (DRFW 0x90 y range) | ~490 ms pull for a y window | copies rows 0..y1 down the panel | never: keep DRFW `00 3B 00 A9` |
-| **Calm partial** (`epd_partial`): film state in 0x11, new frame in 0x10, 20-frame transition table | ~0.48 s per frame, however much changed | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
+| **Calm partial** (`part_start`): film state in 0x11, new frame in 0x10, 10 one-frame groups, scan limited to the changed rows (at least 336, a + b + 1 >= 680) | 237 ms full height, ~125 ms for changes in the lower half | only changed pixels move; ink dark red, erased ink leaves a light ghost | badge os `ui_frame` |
 
 ### Timing details
 - A pull (`0x15 3C`) plays the latched waveform; its length follows the table: frames x ~23.7 ms. The badge team

@@ -50,7 +50,9 @@
   been flushed.
 
 ## The panel (measured; the full story with pins and timings is in DEVICE_INFO.md)
-- `ui_frame` is a calm partial update: ~0.48 s however much changed, only changed pixels
-  move, nothing flashes. ~2 frames/s is the hardware floor. Ink is dark red, erased ink leaves a light ghost.
-  No red. A fresh panel session every 60 frames costs ~0.5 s. `ui_wipe()` (~2.8 s) shakes the ghosts off.
+- `ui_frame` is a calm partial update over the rows that changed: ~0.24 s if they reach the top of the screen,
+  ~0.13 s if they all lie in the lower half (so keep fast-changing things low). Only changed pixels move, nothing
+  flashes. It returns while the panel works and waits only if the previous frame has not started yet: draw the next
+  frame meanwhile, and run game logic on its own clock (see app_snake.c) rather than one step per frame.
+  Ink is dark red, erased ink leaves a light ghost. No red. `ui_wipe()` (~2.8 s) shakes the ghosts off.
 - Never run the slow 3-colour refresh (~35 s): the owner does not want it on the badge.

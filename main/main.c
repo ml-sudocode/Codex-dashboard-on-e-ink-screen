@@ -319,31 +319,36 @@ static void epd_init(void)
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev, &spi));
 }
 
-// ---- Calm partial updates (panel_lab's driver)
-// epd_partial(black)  black/white frame, no flash: only pixels that differ from what the panel shows are driven.
-//                     One pull, ~0.48 s, however much changed. Ink comes out dark red; erased pixels leave a light
-//                     ghost. Keeps the panel session (DC-DC) open for the next call.
-// epd_sleep()         ends the partial session with the normal DC-DC soft shutdown.
-// part_shown must match the film before the first epd_partial: ui_wipe leaves both all white.
+// ---- Calm partial updates (panel_lab's driver, experiments 05 and 11-14)
+// part_start(black)  black/white frame, no flash: only pixels that differ from what the panel shows are driven. One
+//                    pull of 10 frames over the rows that changed: ~0.24 s if they reach the top of the panel, down
+//                    to ~0.13 s if they all lie in the lower half. Returns as soon as the pull runs; part_wait()
+//                    before the next panel access (the CoG drops every command and RAM write while BUSY is low).
+//                    Ink comes out dark red; erased pixels leave a light ghost. Keeps the session (DC-DC) open.
+// epd_sleep()        ends the partial session with the normal DC-DC soft shutdown.
+// part_shown must match the film before the first part_start: ui_wipe leaves both all white.
 
-#define PART_DRIVE 10 // frames of VDH/VDL per change (of 20 per pull): 10 for the film's health (owner); 6 is the least that reads clearly
-_Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 19, "the pull has 20 frames and the last one must be GND");
+#define PART_DRIVE 9 // frames of VDH/VDL per change: 9 fills the 10-frame pull
+_Static_assert(PART_DRIVE >= 1 && PART_DRIVE <= 9, "the pull has 10 frames and the last one must be GND");
+#define PART_MIN_ROWS 336 // fewest rows a pull scans. A frame lasts as long as its scan, so this sets the least drive a
+                          // change gets: 9 frames x 336 rows x 35 us = ~105 ms, like 4.4 full-height frames (readable)
 
 static EXT_RAM_BSS_ATTR uint8_t part_shown[PLANE]; // what the film shows; after every pull the CoG's 0x11 holds the same
 static int part_prev[2][4];       // per CoG, the byte box {x0, x1, y0, y1} the last pull changed; x1 < x0: none
 static int part_n = -1;           // pulls in the open partial session, -1 = no session
+static volatile int64_t part_t0;  // when the running pull's frame started, 0 = no pull running
+static int part_a, part_b;        // its rows
 
 // Transition table: old frame in 0x11, new frame in 0x10, table = (old << 1) | new. Table 1 (white->black) VDH and
-// table 2 (black->white) VDL for the first PART_DRIVE frames, then GND; tables 0, 3 and VCOM at GND. Every group runs
-// only its phases c and d (SRab 0): 10 groups x 2 frames = 20 frames = 475 ms, the shortest pull this CoG runs
-// (a zero TP, RP 0 and SRab = SRcd = 0 all hang it). The last frame is GND, so no pixel keeps a charge.
+// table 2 (black->white) VDL for the first PART_DRIVE frames, then GND; tables 0, 3 and VCOM at GND. Every group is
+// one frame, phase c only (SRab 0, TPc 1, TPd 0): 10 groups = 10 frames, 237 ms at full height. Zero in a whole half,
+// RP 0, SRab = SRcd = 0 and SRcd 0 alone all hang the CoG. The last frame is GND.
 static void part_table(uint8_t *t)
 {
-    for (int k = 0; k < 50; k++) memcpy(t + 8 * k, (const uint8_t[]){0, 1, 1, 0, 1, 1, 1, 1}, 8);
+    for (int k = 0; k < 50; k++) memcpy(t + 8 * k, (const uint8_t[]){0, 1, 1, 0, 1, 0, 1, 1}, 8);
     for (int f = 0; f < PART_DRIVE; f++) {
-        int g = f / 2, shift = f % 2 ? 0 : 2; // phase c: bits 3-2, phase d: bits 1-0
-        t[(10 + g) * 8] |= 1 << shift;        // VDH
-        t[(20 + g) * 8] |= 2 << shift;        // VDL
+        t[(10 + f) * 8] = 1 << 2; // VDH in phase c (level bits 3-2)
+        t[(20 + f) * 8] = 2 << 2; // VDL
     }
 }
 
@@ -398,19 +403,32 @@ static void part_window(int cog, const uint8_t *src, const int *b)
     gpio_set_level(cs, 1);
 }
 
+// Until the running pull is done: BUSY polled every 1 ms tick.
+static void part_wait(void)
+{
+    if (!part_t0) return;
+    int64_t t;
+    while (!(gpio_get_level(BUSY_L) && gpio_get_level(BUSY_R)) && (t = esp_timer_get_time() - part_t0) < 3000000)
+        vTaskDelay(1);
+    ESP_LOGI(TAG, "partial: rows %d-%d, %d ms", part_a, part_b, (int)((esp_timer_get_time() - part_t0) / 1000));
+    part_t0 = 0;
+}
+
 static void epd_sleep(void)
 {
+    part_wait();
     if (part_n >= 0) epd_close();
     part_n = -1;
 }
 
-static void epd_partial(const uint8_t *black)
+static void part_start(const uint8_t *black)
 {
     int64_t t0 = esp_timer_get_time();
     int now[2][4];
     bool any = false;
     for (int c = 0; c < 2; c++) part_box(black, part_shown, c + 1, now[c]), any |= now[c][1] >= now[c][0];
-    if (!any) return ms(1); // nothing changed; still yield, apps call this in tight loops
+    if (!any) return;
+    part_wait();
     if (part_n == 60) epd_sleep(); // a fresh session every 60 pulls: sessions of 60 are proven, longer ones are not
     if (part_n < 0) part_open();
     // The CoG swaps 0x10 and 0x11 after every pull, so 0x11 already holds what the film shows and 0x10 holds the frame
@@ -425,11 +443,27 @@ static void epd_partial(const uint8_t *black)
         if (w[1] >= w[0]) part_window(c + 1, black, w);
         memcpy(p, now[c], sizeof now[c]);
     }
-    CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02); // DUW back to the whole panel
-    int pull = epd_pull(3000);
+    // Scan only rows a..b: DUW at the trigger moves the scan start, DRFW the end, and nothing outside is driven.
+    // Widened to PART_MIN_ROWS for the drive, and until a + b + 1 >= 680: the gate chain then carries the last frame's
+    // pulse past the panel's 680 gate lines before the next frame, otherwise the band reappears b + 1 rows lower.
+    // Rows that cannot meet that get the whole panel.
+    int a = H, b = -1;
+    for (int c = 0; c < 2; c++)
+        if (now[c][1] >= now[c][0]) a = MIN(a, now[c][2]), b = MAX(b, now[c][3]);
+    a &= ~3, b = MIN(H - 1, MAX(b, MAX(679 - a, a + PART_MIN_ROWS - 1)) | 3);
+    a = MIN(a, (b - PART_MIN_ROWS + 1) & ~3);
+    if (a + b + 1 < 680) a = 0, b = H - 1;
+    if (a == 0) {
+        CMD(BOTH, 0x13, 0x00, 0x3B, 0x00, 0x00, 0x9F, 0x02);
+        CMD(BOTH, 0x90, 0x00, 0x3B, 0x00, 0xA9);
+    } else {
+        CMD(BOTH, 0x13, 0x00, 0x3B, a & 0xFF, a >> 8, b & 0xFF, b >> 8);
+        CMD(BOTH, 0x90, 0x00, 0x3B, a >> 2, MIN(0xA9, (b >> 2) + 1));
+    }
+    CMD(BOTH, 0x15, 0x3C);
+    part_t0 = t0, part_a = a, part_b = b;
     memcpy(part_shown, black, PLANE);
     part_n++;
-    ESP_LOGI(TAG, "partial: pull %d ms, total %d ms", pull, (int)((esp_timer_get_time() - t0) / 1000));
 }
 
 // ---- Drawing into fb
@@ -462,7 +496,10 @@ void text(int x, int y, int scale, const char *s, bool ink)
 static const char *bar_app = "Home"; // the name in the top bar
 static const char *keys[4];           // ui_keys: what BTN_PLUS, BTN_MINUS, BTN_A, BTN_B do now
 static volatile bool in_app;          // an app is running: MENU + and MENU - held together go home
-static SemaphoreHandle_t panel_lock;  // one panel user at a time; going home waits for the frame in flight
+static SemaphoreHandle_t panel_lock;  // recursive: one panel user at a time
+static EXT_RAM_BSS_ATTR uint8_t part_next[PLANE]; // the frame ui_frame handed over
+static volatile bool part_pending;    // ... and the panel task has not started it yet
+static TaskHandle_t panel_task;
 static void draw_bar(void);
 
 void ui_keys(const char *plus, const char *minus, const char *a, const char *b)
@@ -470,20 +507,51 @@ void ui_keys(const char *plus, const char *minus, const char *a, const char *b)
     keys[BTN_PLUS] = plus, keys[BTN_MINUS] = minus, keys[BTN_A] = a, keys[BTN_B] = b;
 }
 
+#define LOCK() xSemaphoreTakeRecursive(panel_lock, portMAX_DELAY)
+#define UNLOCK() xSemaphoreGiveRecursive(panel_lock)
+
+// The panel task starts every frame, then waits for the pull without the lock, so ui_frame can hand over the next
+// frame meanwhile and the app draws while the panel pulls. While the screen sits still it does the 60-pull
+// session reopen, so a frame does not pay for it.
+static void panel_run(void *arg)
+{
+    for (;;) {
+        bool idle = !ulTaskNotifyTake(pdTRUE, part_n >= 40 ? pdMS_TO_TICKS(500) : portMAX_DELAY);
+        LOCK();
+        if (part_pending) part_pending = false, part_start(part_next);
+        else if (idle && part_n >= 40) epd_sleep(), part_open();
+        UNLOCK();
+        part_wait();
+    }
+}
+
+// Hands the frame over and returns while the panel works; waits only while the previous frame has not started, so
+// an app that calls it in a loop runs at the panel's pace with its drawing overlapping the pulls.
 void ui_frame(int pulls)
 {
     (void)pulls; // a partial update is one pull whatever was asked
-    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    while (part_pending) ms(1);
+    LOCK();
     draw_bar();
-    epd_partial(fb);
-    xSemaphoreGive(panel_lock);
+    memcpy(part_next, fb, PLANE);
+    part_pending = true;
+    UNLOCK();
+    xTaskNotifyGive(panel_task);
+}
+
+// The frame handed over, if any, on the panel; nothing running. Under the lock.
+static void panel_flush(void)
+{
+    part_wait();
+    if (part_pending) part_pending = false, part_start(part_next), part_wait();
 }
 
 // Partial updates leave light ghosts of erased ink; a scene change shakes the film with the short black/white
 // waveform (all black, then all white, ~2.8 s) and leaves the panel and the driver agreeing on white.
 void ui_wipe(void)
 {
-    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    LOCK();
+    part_pending = false; // drawn before the wipe: gone with it
     epd_sleep();
     memset(fb, 0xFF, sizeof fb);
     epd_open(fb);
@@ -493,23 +561,30 @@ void ui_wipe(void)
     epd_close();
     memset(fb, 0, sizeof fb);
     memset(part_shown, 0, sizeof part_shown);
-    xSemaphoreGive(panel_lock);
+    UNLOCK();
 }
 
 void ui_close(void)
 {
-    xSemaphoreTake(panel_lock, portMAX_DELAY);
+    LOCK();
+    panel_flush();
     epd_sleep();
-    xSemaphoreGive(panel_lock);
+    UNLOCK();
 }
 
-// MENU + and MENU - held together in an app: home, by a restart (apps never return by themselves), between frames
-// so the panel is never cut off mid-refresh.
+// Every restart (going home, an app's esp_restart) finishes the panel's work and closes the session: never cut the
+// panel off mid-refresh.
+static void panel_shutdown(void)
+{
+    if (!xSemaphoreTakeRecursive(panel_lock, pdMS_TO_TICKS(3000))) return;
+    panel_flush(); // a last frame handed over just before the restart ("Saved, restarting") still shows
+    epd_sleep();
+}
+
+// MENU + and MENU - held together in an app: home, by a restart (apps never return by themselves).
 static void go_home(void)
 {
     ESP_LOGI(TAG, "MENU + and MENU - held: going home");
-    xSemaphoreTake(panel_lock, portMAX_DELAY);
-    epd_sleep();
     esp_restart();
 }
 
@@ -1375,7 +1450,9 @@ void app_main(void)
     sao_init();
     int up, down;
     ESP_LOGI(TAG, "knob: %d (analog on SAO1 GPIO1: %d %d)", knob_angle(), (knob_analog(&up, &down), up), down);
-    panel_lock = xSemaphoreCreateMutex();
+    panel_lock = xSemaphoreCreateRecursiveMutex();
+    xTaskCreate(panel_run, "panel", 4096, NULL, 5, &panel_task);
+    esp_register_shutdown_handler(panel_shutdown);
     xTaskCreate(buttons, "buttons", 3072, NULL, 3, NULL);
     led_init(); // off: they still show whatever ran before the reset
 

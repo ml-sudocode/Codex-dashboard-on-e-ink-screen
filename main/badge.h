@@ -15,10 +15,11 @@ void box(int x, int y, int w, int h, bool ink); // filled rectangle, black or wh
 void outline(int x, int y, int w, int h, int t); // black frame, t px thick
 void text(int x, int y, int scale, const char *s, bool ink); // 8x8 font, 8 * scale px per character
 
-// Panel: ui_frame shows fb with one calm partial update, ~0.48 s however much changed (~2 frames/s is the hardware
-// floor). Only pixels that changed are driven, nothing else flashes. Ink comes out dark red, erased ink leaves a light
-// ghost. pulls is ignored. No change since the last frame = no refresh.
-// Call ui_close() when the screen will sit still for a while.
+// Panel: ui_frame shows fb with one calm partial update: ~0.24 s if the changes reach the top of the screen, ~0.13 s
+// if they all lie in the lower half. Only pixels that changed are driven, nothing else flashes. Ink comes out dark
+// red, erased ink leaves a light ghost. ui_frame returns while the panel works (it waits only if the previous frame
+// has not started yet), so draw the next frame meanwhile. pulls is ignored. No change = no refresh.
+// Call ui_close() when the screen will sit still for a while: it also shows a frame still on its way.
 void ui_frame(int pulls);
 void ui_close(void);
 // What each button does now, shown beside it in the top bar (two buttons in each top corner: MENU + above A on the
