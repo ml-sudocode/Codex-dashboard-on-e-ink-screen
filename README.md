@@ -33,7 +33,7 @@ Apps take over the badge; hold MENU + and MENU - together to get back home.
 | Radar | Nearby badges running badge os, with distances, and a map once 3+ badges are in range |
 | Source | A QR code to this repo |
 | Hackaday | Hackaday's latest posts with their images, one per screen; open one to read it |
-| News | BBC World headlines, same reader |
+| Video | A 15 s clip at 4 frames/s, to show off the panel |
 | Weather | Current weather and a 5-day forecast (Open-Meteo) for a saved city or coordinates |
 | Settings | Opens a Wi-Fi hotspot "Badge-XXXX" (password `supercon`) with a settings page: username, Wi-Fi, Badge text or picture, weather place and units |
 

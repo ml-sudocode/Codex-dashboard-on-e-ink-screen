@@ -1330,12 +1330,11 @@ static void icon_weather(int x, int y) // a sun behind a cloud
     box(x + 40, y + 112, 96, 24, false);
 }
 
-static void icon_news(int x, int y) // a page of headlines
+static void icon_video(int x, int y) // a play button on a screen
 {
     icon_base(x, y);
-    box(x + 32, y + 28, 112, 120, false);
-    box(x + 44, y + 40, 88, 16, true);
-    for (int k = 0; k < 4; k++) box(x + 44, y + 68 + k * 18, k == 3 ? 56 : 88, 6, true);
+    outline(x + 24, y + 40, 128, 96, 8);
+    for (int r = 0; r < 48; r++) box(x + 72, y + 64 + r, r < 24 ? r + 1 : 48 - r, 1, false);
 }
 
 static void icon_radar(int x, int y) // rings, a sweep line and two blips
@@ -1370,7 +1369,7 @@ static const app_t apps[] = {
     {"Radar", icon_radar, app_radar},
     {"Source", icon_source, app_source},
     {"Hackaday", icon_feed, app_hackaday},
-    {"News", icon_news, app_news},
+    {"Video", icon_video, app_video},
     {"Weather", icon_weather, app_weather},
     {"Settings", icon_settings, app_settings},
 };

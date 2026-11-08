@@ -7,12 +7,13 @@
   - `app-pong`: `main/app_pong.c`, `main/link.h`, `tools/test_link.c`
   - `app-ota`: `main/app_ota.c`, `.github/workflows/`
   - `app-snake`: `main/app_snake.c`
-  - `idfport` (OS maintainer): `main/app_life.c` (Game of Life), `main/app_source.c` (QR code to this repo)
+  - `idfport` (OS maintainer): `main/app_life.c` (Game of Life), `main/app_source.c` (QR code to this repo),
+    `main/app_video.c` (+ `main/rickroll.vid` from `tools/make_video.py`)
   - `app-aliens`: `main/app_aliens.c`
   - `app-blocks`: `main/app_blocks.c`
   - `app-rocks`: `main/app_rocks.c`
   - `app-radar`: `main/app_radar.c`
-  - `app-hackaday`: `main/app_hackaday.c`, `main/app_news.c` (Gallery merged into Hackaday)
+  - `app-hackaday`: `main/app_hackaday.c`
   - `app-badge`: `main/app_badge.c`
   - `app-settings`: `main/app_settings.c`
   - `app-weather`: `main/app_weather.c`
