@@ -183,7 +183,7 @@ static void run(void)
         } else {
             text(MAP_X + 24, cy - 12, 3, "Map: needs 3+ badges", true);
         }
-        ui_frame(1); // returns during the pull; waits only while the last frame has not started. No change = no refresh
+        ui_frame(1); // waits for the previous pull to end, then returns while this one runs. No change = no refresh
 
         int b = btn_get(FRAME_MS);
         if (b == BTN_A) ui_wipe();
