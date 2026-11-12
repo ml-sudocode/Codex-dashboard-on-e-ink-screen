@@ -5,8 +5,8 @@ into a desk dashboard for Codex. I can see which terminals are working,
 which have a reply ready, and which need me. The badge blinks red
 LEDs when my input is needed! That's either very useful or very stressful :/
 
-* [See the app's README](https://github.com/ml-sudocode/supercon26-badge-os/tree/codex-board/apps/codex_board) 
-* [Read the setup guide](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-board/tools/codex_board/README.md)
+* [See the app's README]([https://github.com/ml-sudocode/supercon26-badge-os/tree/codex-board/apps/codex_board](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-dashboard/apps/codex_board/README.md)) 
+* [Read the setup guide](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-dashboard/tools/codex_board/README.md)
 
 ![Codex Board running on the Billboard Badge](./dashboard.jpg)
 ![A second view of Codex Board](./dashboard_red-leds.png)
