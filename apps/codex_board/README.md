@@ -5,8 +5,10 @@ into a desk display for my Codex terminal sessions. I can glance at it
 to see which sessions are working, which have a reply ready, and which
 need my input or approval.
 
-![Codex Board running on the Billboard Badge](./dashboard.jpg)
-![Blinking red lights for when it's waiting for me! :)](./dashboard_red-leds.png)
+<p align="left">
+  <img src="./dashboard.jpg" height="480" alt="Codex terminals with status">
+  <img src="./dashboard_red-leds.png" height="480" alt="Blinking red lights: attention required!">
+</p>
 
 ## What I added
 
