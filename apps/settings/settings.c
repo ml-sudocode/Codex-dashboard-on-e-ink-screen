@@ -32,6 +32,9 @@ static const char page[] =
     "<small>Top bar and other badges' Radar.</small></fieldset>"
     "<fieldset><legend>Wi-Fi the badge joins</legend>SSID<input id=ssid maxlength=32>"
     "Password<input id=pass maxlength=63 autocomplete=off></fieldset>"
+    "<fieldset><legend>Codex Board</legend>Feed URL<input id=cb_url maxlength=240 "
+    "placeholder='http://192.168.1.10:8765/feed.txt'>"
+    "<small>Leave blank for USB. For Wi-Fi, enter the Linux collector or Mac relay address.</small></fieldset>"
     "<fieldset><legend>Badge app</legend>"
     "<label><input type=radio name=m id=mt checked> Text</label> <label><input type=radio name=m id=mi> Picture</label>"
     "<div id=bt><textarea id=badge_text rows=5 maxlength=1000></textarea></div>"
@@ -49,7 +52,7 @@ static const char page[] =
     "work: the badge has no internet to follow them).</small></div>"
     "Temperature<select id=wx_unit><option value=''>Celsius<option value=F>Fahrenheit</select></fieldset>"
     "<button id=save>Save and restart the badge</button><p id=st></p><script>"
-    "var K=['name','ssid','pass','badge_text','wx_city','wx_lat','wx_lon','wx_unit'],$=function(i){return document.getElementById(i)},"
+    "var K=['name','ssid','pass','badge_text','wx_city','wx_lat','wx_lon','wx_unit','cb_url'],$=function(i){return document.getElementById(i)},"
     "img=null,gray=null,hadImg=false;"
     "fetch('/cfg').then(function(r){return r.json()}).then(function(c){K.forEach(function(k){$(k).value=c[k]||''});"
     "hadImg=c.img;if(!c.wx_city&&c.wx_lat)$('wn').checked=true;if(c.img){$('mi').checked=true;$('ist').textContent='A picture is saved; choose a file to replace it.'}mode()});"
@@ -83,7 +86,7 @@ static const char page[] =
     "</script>";
 
 static volatile bool saved;
-static const char *const keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon", "wx_unit"};
+static const char *const keys[] = {"name", "ssid", "pass", "badge_text", "wx_city", "wx_lat", "wx_lon", "wx_unit", "cb_url"};
 
 static void json_str(char **p, const char *key, const char *v) // "key":"v", (v JSON-escaped)
 {
@@ -143,6 +146,15 @@ static bool coord(const char *s, double max) // empty, or a number in -max..max
     return !*s || (e != s && !*e && d >= -max && d <= max);
 }
 
+static bool feed_url(const char *s)
+{
+    if (!*s) return true;
+    if (strlen(s) > 240 || strncmp(s, "http://", 7) || !s[7] || s[7] == '/') return false;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        if (*p <= 32 || *p > 126 || *p == '@' || *p == '#') return false;
+    return true;
+}
+
 // Body: key \0 value \0 ... (no URL decoding needed). Everything is checked before anything is stored.
 static esp_err_t post_save(httpd_req_t *r)
 {
@@ -164,6 +176,7 @@ static esp_err_t post_save(httpd_req_t *r)
         else if (!strcmp(k, "wx_unit") && strcmp(v, "") && strcmp(v, "C") && strcmp(v, "F")) bad = "Unit: C or F.";
         else if (!strcmp(k, "wx_lat") && !coord(v, 90)) bad = "Latitude: a number from -90 to 90.";
         else if (!strcmp(k, "wx_lon") && !coord(v, 180)) bad = "Longitude: a number from -180 to 180.";
+        else if (!strcmp(k, "cb_url") && !feed_url(v)) bad = "Feed URL: http:// address, up to 240 characters, no credentials.";
         else if (!known(k)) bad = "Unknown setting.";
     }
     if (bad) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, bad);
