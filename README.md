@@ -8,8 +8,10 @@ LEDs when my input is needed! That's either very useful or very stressful :/
 * [See the app's README]([https://github.com/ml-sudocode/supercon26-badge-os/tree/codex-board/apps/codex_board](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-dashboard/apps/codex_board/README.md)) 
 * [Read the setup guide](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-dashboard/tools/codex_board/README.md)
 
-![Codex Board running on the Billboard Badge](./dashboard.jpg)
-![A second view of Codex Board](./dashboard_red-leds.png)
+<p align="left">
+  <img src="./dashboard.jpg" height="480" alt="Codex terminals with status">
+  <img src="./dashboard_red-leds.png" height="480" alt="Blinking red lights: attention required!">
+</p>
 
 Codex Board builds on Badge OS by yigitabi5444.
 
