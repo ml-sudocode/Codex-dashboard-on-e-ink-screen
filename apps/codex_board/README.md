@@ -5,6 +5,9 @@ into a desk display for my Codex terminal sessions. I can glance at it
 to see which sessions are working, which have a reply ready, and which
 need my input or approval.
 
+![Codex Board running on the Billboard Badge](./dashboard.jpg)
+![Blinking red lights for when it's waiting for me! :)](./dashboard_red-leds.png)
+
 ## What I added
 
 - An e-paper dashboard with one row per tmux pane, Codex quota and reset
