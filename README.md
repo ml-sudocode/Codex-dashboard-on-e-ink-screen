@@ -1,3 +1,18 @@
+# Codex Board
+
+I built Codex Board to turn my Hackaday Supercon 2026 Billboard Badge
+into a desk dashboard for Codex. I can see which terminals are working,
+which have a reply ready, and which need me. The badge blinks red
+LEDs when my input is needed! That's either very useful or very stressful :/
+
+* [See the app's README](https://github.com/ml-sudocode/supercon26-badge-os/tree/codex-board/apps/codex_board) 
+* [Read the setup guide](https://github.com/ml-sudocode/supercon26-badge-os/blob/codex-board/tools/codex_board/README.md)
+
+![Codex Board running on the Billboard Badge](./dashboard.jpg)
+![A second view of Codex Board](./dashboard_red-leds.png)
+
+Codex Board builds on Badge OS by yigitabi5444.
+
 # badge os
 
 A small operating system for the Hackaday Supercon 2026 "Billboard Badge" (ESP32-S3 with 8 MB PSRAM and a 9.7"
