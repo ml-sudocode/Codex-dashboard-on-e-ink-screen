@@ -20,7 +20,7 @@ need my input or approval.
 
 You’ll need the 2026 Billboard Badge, the Codex Board firmware, and a
 computer running Codex in tmux. Start with the USB setup in the
-[build and setup guide](CODEX_BOARD_GUIDE.html).
+[build and setup guide](../../tools/codex_board/README.md).
 
 ## Credits
 
