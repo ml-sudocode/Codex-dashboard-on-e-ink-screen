@@ -1,0 +1,5 @@
+[
+  {"id": "demo-1", "task": "Build Codex Board", "status": "WORKING"},
+  {"id": "demo-2", "task": "Choose a display layout", "status": "NEEDS_YOU"},
+  {"id": "demo-3", "task": "Connection check", "status": "DONE"}
+]
